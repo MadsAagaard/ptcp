@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<!--
+  ptcp_run_qc_report_template.html — 261015
+  ──────────────────────────────────────────────────────────────────────────────
+  Self-contained single-file HTML template for the PTCP RUN QC report: one per
+  run (sample sheet), for the laboratory / bioinformatics review of the run.
+
+  QC ONLY
+  ───────
+  This report names every sample of the run, so it carries NO result: no copy
+  number, genotype, inversion call or repeat size. Per target it shows reads
+  and whether the caller produced a call ("callable"), never what the call is.
+  Results live only in each sample's own report (<npn>.PTCP.sampleReport.html).
+
+  INJECTION POINT: as the sample template (ptcp_report_collector.py).
+
+  SECTIONS
+  ────────
+  01  Run Integrity       sheet vs ptcp-qc, missing / dropped samples, sex checks, tool versions
+  02  Sample QC           one row per sample (ptcp-qc stats + aggregate sample_stats)
+  03  Carrier Targets     samples x targets: reads and callability
+  04  All ptcp-qc Loci    aggregate locus_stats (incl. off-target / unmapped), no sample identities
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PTCP Run QC</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<!--STYLE-->
+</head>
+<body>
+
+<aside>
+  <div class="logo-block">
+    <div class="logo-dept-name">Klinisk Genetik</div>
+    <div class="logo-dept-sub">Vejle Sygehus<br>Beriderbakken 4<br>7100 Vejle</div>
+    <div class="logo-assay">PureTarget · Run QC</div>
+  </div>
+  <nav id="sidebar-nav">
+    <a href="#s-run"><span class="dot"></span>Run Integrity</a>
+    <a href="#s-qc"><span class="dot"></span>Sample QC</a>
+    <a href="#s-targets"><span class="dot"></span>Carrier Targets</a>
+    <a href="#s-loci"><span class="dot"></span>All ptcp-qc Loci</a>
+  </nav>
+</aside>
+
+<main>
+  <div id="top-banner"></div>
+  <div class="page-header">
+    <div class="tag">PTCP Run QC — no results in this report</div>
+    <h1 id="title"></h1>
+    <div class="meta-grid" id="meta-grid"></div>
+  </div>
+
+  <section id="s-run">
+    <div class="section-header"><span class="section-num">01</span><h2>Run Integrity</h2></div>
+    <div class="card" id="run-cards"></div>
+    <div class="checks" id="run-checks"></div>
+    <div class="card" id="run-tools" style="margin-top:12px"></div>
+    <div id="run-notes"></div>
+    <div class="source-line" id="src-run"></div>
+  </section>
+
+  <section id="s-qc">
+    <div class="section-header"><span class="section-num">02</span><h2>Sample QC</h2></div>
+    <div class="card" id="qc-table"></div>
+    <div id="qc-notes"></div>
+    <div class="source-line" id="src-qc"></div>
+  </section>
+
+  <section id="s-targets">
+    <div class="section-header"><span class="section-num">03</span><h2>Carrier Targets — Reads &amp; Callability</h2></div>
+    <div class="card" id="tg-matrix"></div>
+    <div id="tg-notes"></div>
+    <div class="source-line" id="src-targets"></div>
+  </section>
+
+  <section id="s-loci">
+    <div class="section-header"><span class="section-num">04</span><h2>All ptcp-qc Loci</h2></div>
+    <div class="card" id="loci-table"></div>
+    <div id="loci-notes"></div>
+    <div class="source-line" id="src-loci"></div>
+  </section>
+</main>
+
+<script>
+// ── DATA — injected by ptcp_report_collector.py ──────────────────────────────
+/* DATA_INJECT */
+const DATA = {};
+
+const TEMPLATE_VERSION = '261015';
+
+<!--HELPERS-->
+
+if (!DATA.metadata) {
+  document.getElementById('title').textContent = 'No data — inject JSON via ptcp_report_collector.py';
+  throw new Error('DATA stub detected — template not yet populated');
+}
+const M = DATA.metadata, R = DATA.run || {}, S = DATA.samples || [];
+const REF = DATA.reference;   // lab target-share reference, or null
+const QC = {};
+S.forEach(s => { QC[s.id] = sampleQC(s, s.loci, s.sex_reported, s.target_shares, REF ? REF.targets : null, 'reference'); });
+// Sequencing groups: one SMRT Cell = one multiplexed pool. A sample whose uBAMs
+// come from more than one cell (top-up) belongs to no group and is kept out of
+// the per-cell statistics.
+const cellOf = s => (s.cells || []).length === 1 ? s.cells[0] : null;
+// single-cell samples grouped by cell, then multi-cell / unknown-cell samples last
+const byCell = (a, b) => { const ca = cellOf(a), cb = cellOf(b);
+  if (!ca !== !cb) return ca ? -1 : 1;
+  return ca === cb ? String(a.id).localeCompare(String(b.id)) : ca < cb ? -1 : 1; };
+const GROUPS = {};
+S.forEach(s => { const c = cellOf(s); if (c) (GROUPS[c] = GROUPS[c] || []).push(s); });
+const MULTI = S.filter(s => (s.cells || []).length > 1), NOCELL = S.filter(s => !(s.cells || []).length);
+// ptcp-qc locus group -> caller keys whose "callable" flag counts for that target
+const CALLERS = { smn1: ['smn1'], gba: ['gba'], cyp21: ['cyp21'], hba: ['hba'], hbb: ['hbb'], rpgr: ['rpgr'], f8inv1: ['f8inv1'], f8inv22: ['f8inv22'],
+                  FXS_FMR1: ['FXS_FMR1'], FRDA_FXN: ['FRDA_FXN'], AFF2: ['FRAXE_AFF2'], ARX: ['EIEE1_ARX', 'PRTS_ARX'] };
+const ICON = { ok: ['&#10003;', 'var(--green)'], warn: ['&#9888;', 'var(--gold)'], fail: ['&#10007;', 'var(--red)'] };
+const reportLink = id => `${id}.PTCP.sampleReport.html`;
+
+// ── Header ───────────────────────────────────────────────────────────────────
+(function() {
+  document.title = `PTCP Run QC — ${M.samplesheet}`;
+  document.getElementById('title').textContent = M.samplesheet;
+  document.getElementById('meta-grid').innerHTML = [
+    ['Sequencing', `${Object.keys(GROUPS).length} cell${Object.keys(GROUPS).length === 1 ? '' : 's'}${MULTI.length ? ` + ${MULTI.length} multi-cell` : ''}`], ['Samples', S.length], ['Read mode', M.read_mode],
+    ['PTCP basis', M.ptcp_version ? `v${M.ptcp_version}` : null], ['ptcp-qc', M.ptcp_qc_version], ['Report date', M.report_date],
+  ].map(([l, v]) => `<div class="meta-item"><div class="meta-label">${l}</div><div class="meta-value">${esc(v)}</div></div>`).join('');
+  if (DATA._demo) document.getElementById('top-banner').innerHTML = `<div class="mock-banner">&#9888;&nbsp; ${DATA._demo}</div>`;
+})();
+
+// ══ 01 — RUN INTEGRITY ═══════════════════════════════════════════════════════
+(function() {
+  const nFail = S.filter(s => QC[s.id].verdict === 'fail').length, nWarn = S.filter(s => QC[s.id].verdict === 'warn').length;
+  const nNd = S.filter(s => QC[s.id].verdict === 'nd').length;
+  const tr = R.total_reads || {};
+  document.getElementById('run-cards').innerHTML = `
+    <div class="compare-header"><span class="compare-header-title">Run composition</span><span class="compare-header-sub">${esc(M.run_output)}</span></div>
+    <div class="kv-grid">
+      ${kviL('In sample sheet', R.samples_in_sheet, '')}
+      ${kviL('In ptcp-qc', R.ptcp_qc_samples, `${grp(tr.total)} reads · ${grp(tr.fail)} fail`)}
+      ${kviL('No uBAM found', (R.missing || []).length, (R.missing || []).length ? 'see checks' : 'all sheet rows matched', (R.missing || []).length ? 'warn' : 'ok', (R.missing || []).length ? 'dev-val' : null)}
+      ${kviL('Dropped by size gate', (R.dropped || []).length, `ptcpMinGB ${esc(M.min_gb)}`, null, (R.dropped || []).length ? 'dev-val' : null)}
+      ${kviL('Sample QC', `${S.length - nFail - nWarn - nNd} / ${S.length}`, `${nWarn} review · ${nFail} fail${nNd ? ` · ${nNd} no data` : ''}`, nFail || nNd ? 'bad' : nWarn ? 'warn' : 'ok')}
+    </div>
+    <div class="compare-header" style="border-top:1px solid var(--border)"><span class="compare-header-title">Sequencing</span>
+      <span class="compare-header-sub">SMRT Cells the analysed uBAMs came from · share-of-pool statistics are per cell</span></div>
+    <div class="tbl-wrap"><table><thead><tr><th>SMRT Cell</th><th>Run folder</th><th class="r">Samples in this report</th><th class="r">Reads</th></tr></thead><tbody>
+      ${Object.entries(GROUPS).sort().map(([c, ss]) => `<tr><td class="bold">${esc(c)}</td><td>${esc([...new Set(ss.flatMap(s => s.runs || []))].join(', '))}</td>
+        <td class="r">${ss.length}</td><td class="r">${grp(ss.reduce((a, s) => a + (s.total_reads || 0), 0))}</td></tr>`).join('')}
+      ${MULTI.length ? `<tr><td class="bold" style="color:var(--gold)">multiple cells</td><td style="white-space:normal">${MULTI.map(s => `${esc(s.id)}: ${s.cells.map(esc).join(' + ')}`).join('<br>')}</td>
+        <td class="r">${MULTI.length}</td><td class="r">${grp(MULTI.reduce((a, s) => a + (s.total_reads || 0), 0))}</td></tr>` : ''}
+      ${NOCELL.length ? `<tr><td class="bold" style="color:var(--muted)">not recorded</td><td>—</td><td class="r">${NOCELL.length}</td><td class="r">${grp(NOCELL.reduce((a, s) => a + (s.total_reads || 0), 0))}</td></tr>` : ''}
+    </tbody></table></div>`;
+  const noJson = S.filter(s => !s.has_sample_json), notInSheet = S.filter(s => !s.in_sample_sheet), notInAgg = S.filter(s => s.in_sample_sheet && !s.in_aggregate);
+  const sexFail = S.filter(s => QC[s.id].sx.state === 'fail'), sexOther = S.filter(s => ['warn', 'nd'].includes(QC[s.id].sx.state));
+  const checks = [
+    { state: (R.missing || []).length ? 'warn' : 'ok', text: (R.missing || []).length ? 'Sample sheet rows without a matching uBAM (NPN + testlist)' : 'Every sample sheet row matched its uBAMs',
+      detail: (R.missing || []).length ? R.missing.map(x => `${x.id} · ${x.testlist}`).join(', ') : `${R.samples_in_sheet} / ${R.samples_in_sheet}` },
+    { state: notInAgg.length ? 'fail' : 'ok', text: notInAgg.length ? 'Analysed samples missing from the ptcp-qc aggregate' : 'Every sample is in the ptcp-qc aggregate',
+      detail: notInAgg.length ? notInAgg.map(s => s.id).join(', ') : `${R.ptcp_qc_samples} / ${S.length}` },
+    { state: noJson.length ? 'fail' : 'ok', text: noJson.length ? 'Samples without a per-sample ptcp-qc JSON — their sample report is empty' : 'Every sample has its per-sample ptcp-qc JSON',
+      detail: noJson.length ? noJson.map(s => s.id).join(', ') : `${S.length} / ${S.length}` },
+    { state: notInSheet.length ? 'fail' : 'ok', text: notInSheet.length ? 'ptcp-qc samples not in the sample sheet' : 'No ptcp-qc sample outside the sample sheet',
+      detail: notInSheet.length ? notInSheet.map(s => s.id).join(', ') : '0' },
+    { state: sexFail.length ? 'fail' : sexOther.length ? 'warn' : 'ok',
+      text: sexFail.length ? 'Sheet sex contradicts the X/Y read ratios — sample identity or sheet error'
+          : sexOther.length ? 'Sex not checked or not determinable for some samples' : 'Sheet sex agrees with the X/Y read ratios for every sample',
+      detail: sexFail.length ? sexFail.map(s => `${s.id}: sheet ${s.sex_reported}, data ${QC[s.id].sx.data}`).join(', ')
+            : sexOther.length ? sexOther.map(s => s.id).join(', ') : `${S.length} / ${S.length}` },
+  ];
+  document.getElementById('run-checks').innerHTML = checks.map(c => {
+    const [g, col] = ICON[c.state];
+    return `<div class="check-row"><span style="color:${col}">${g}</span><span${c.state === 'ok' ? '' : ` style="color:${col}"`}>${esc(c.text)}</span>
+      <span class="check-detail">${esc(c.detail)}</span></div>`;
+  }).join('');
+  const tv = M.tools || [];
+  document.getElementById('run-tools').innerHTML = `
+    <div class="compare-header"><span class="compare-header-title">Tool versions</span><span class="compare-header-sub">against PacBio PTCP v${esc(M.ptcp_version)}</span>
+      <span class="spacer"></span>${badge(`${tv.filter(t => t.version !== t.ptcp).length} differ`, tv.some(t => t.version !== t.ptcp) ? 'info' : 'pass')}</div>
+    <div class="kv-grid">${tv.map(t => kvi(esc(t.tool), esc(t.version), t.version === t.ptcp ? 'as PTCP' : `PTCP: ${esc(t.ptcp)}`, t.version === t.ptcp ? 'ok' : 'warn')).join('')}</div>
+    <div class="links-line"><span class="links-key">lrsCustomTools</span>${esc(M.lrscustomtools_release)}
+      &nbsp;&nbsp;<span class="links-key">collector</span>${esc(M.collector_version)} &nbsp;&nbsp;<span class="links-key">template</span>${TEMPLATE_VERSION}</div>`;
+  const notes = [
+    noteRow('info', 'scope', `This report names every sample and therefore carries <b>no results</b>. Calls are only in each sample's own report, which shows nothing about other samples.`),
+    noteRow('info', 'failed tasks', `Failed or ignored Nextflow tasks are recorded in <code>runInfo/&lt;date&gt;_${esc(M.samplesheet)}/FAILED_TASKS.PTCP.txt</code>, written after this report.`),
+    noteRow('info', 'tool versions', `Configured versions (conf/ptcp.config), not probed from the tools at run time.`),
+    noteRow(Object.keys(GROUPS).length > 1 || MULTI.length ? 'caution' : 'info', 'sequencing',
+      `"Samples in this report" counts only the samples of this sample sheet; other samples on the same SMRT Cell are not seen here. ${MULTI.length ? `${MULTI.length} sample(s) combine reads from more than one cell (top-up) and are left out of the per-cell share-of-pool statistics.` : ''}`),
+  ];
+  document.getElementById('run-notes').innerHTML = notesCard(notes, 'runnote');
+  document.getElementById('src-run').innerHTML = src('run');
+})();
+
+// ══ 02 — SAMPLE QC ═══════════════════════════════════════════════════════════
+(function() {
+  const total = S.reduce((a, s) => a + (s.total_reads || 0), 0);
+  // share of the sample's own SMRT Cell (pool), among the samples of that cell in this report
+  const poolOf = s => { const g = GROUPS[cellOf(s)]; if (!g) return null;
+    const tot = g.reduce((a, o) => a + (o.total_reads || 0), 0), even = 100 / g.length;
+    const shares = g.map(o => (o.total_reads || 0) / tot * 100);
+    return { share: (s.total_reads || 0) / tot * 100, even, max: Math.max(...shares), n: g.length }; };
+  const order = [...S].sort(byCell);
+  const rows = order.map(s => {
+    const d = QC[s.id], x = d.sx, pl = poolOf(s);
+    const col = x.state === 'fail' ? 'var(--red)' : x.state === 'warn' ? 'var(--gold)' : 'var(--text2)';
+    return `<tr><td class="npn"><a href="${esc(reportLink(s.id))}" style="color:inherit;text-decoration:none" title="open sample report">${esc(s.id)}</a>
+        <div class="cell-sub">${esc(s.testlist)} · ${(s.cells || []).length ? s.cells.map(esc).join(' + ') : 'cell not recorded'}</div></td>
+      <td><span style="color:${col}">${esc(s.sex_reported)} &rarr; ${esc(x.data)}</span><div class="cell-sub">${x.state === 'nd' ? 'no X/Y ratios' : `X ${num(x.r.ratio_x_auto, 2)} · Y ${num(x.r.ratio_y_auto, 2)}`}</div></td>
+      <td class="r">${grp(s.total_reads)}<div class="cell-sub">on-target ${grp(s.on_target_reads)}</div></td>
+      <td>${pl ? `<div class="share-wrap"><div class="share-track"><div class="share-fill${pl.share < pl.even * 0.5 ? ' low' : ''}" style="width:${pl.share / pl.max * 100}%"></div>
+        <div class="share-even" style="left:${pl.even / pl.max * 100}%"></div></div><span style="color:var(--text)">${pl.share.toFixed(1)}%</span></div>
+        <div class="cell-sub">of ${pl.n} on this cell · even ${pl.even.toFixed(1)}%</div>`
+        : `<span style="color:var(--muted)">${(s.cells || []).length > 1 ? 'multiple cells' : '—'}</span>`}</td>
+      <td class="r"${d.onFrac != null && d.onFrac < TQC.on_target_frac_warn ? ' style="color:var(--gold)"' : ''}>${pct(d.onFrac)}</td>
+      <td class="r">${d.minLoc != null ? grp(d.minLoc) : '—'}<div class="cell-sub">lowest target</div></td>
+      <td class="r">${d.qv != null ? `Q${num(d.qv, 0)}` : '—'}<div class="cell-sub">${s.read_length_median != null ? `${grp(s.read_length_median)} bp` : ''}</div></td>
+      <td style="white-space:normal;min-width:170px">${badge(VERDICT_TXT[d.verdict], VERDICT_CLS[d.verdict], true)}${d.issues.length ? `<div class="cell-sub" style="color:var(--gold);overflow-wrap:anywhere">${esc(d.issues.join(' · '))}</div>` : ''}</td></tr>`;
+  }).join('');
+  document.getElementById('qc-table').innerHTML = `
+    <div class="compare-header"><span class="compare-header-title">ptcp-qc per sample</span>
+      <span class="compare-header-sub">${S.length} samples · ${grp(total)} reads · grouped by SMRT Cell · NPN links to the sample report</span></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Sample</th><th>Sex sheet &rarr; data</th><th class="r">Reads</th>
+      <th>Share of cell &nbsp;<span style="color:var(--slate)">| = even</span></th>
+      <th class="r">On-target</th><th class="r">Target reads</th><th class="r">Read Q / length</th><th>QC</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const notes = [
+    thresholdNote(`target reads ≥ ${TQC.locus_reads_warn} (fail &lt; ${TQC.locus_reads_fail}), on-target ≥ ${pct(TQC.on_target_frac_warn, 0)}, median read Q ≥ ${TQC.read_q_warn}, sex from X/Y ratios`),
+    noteRow('caution', 'ptcp-qc coverage', `ptcp-qc's <code>pct_targets_ge_*</code> / <code>mean_coverage</code> count all 48 rows of its BED, including repeat-panel loci a carrier run does not capture, so they are not used; reads per carrier target are (section 03).`),
+    noteRow('info', 'on-target', REF && REF.on_target_fraction ? `Reference on-target fraction (${esc(REF.name)}): median ${pct(REF.on_target_fraction.median)}, range ${pct(REF.on_target_fraction.min)}–${pct(REF.on_target_fraction.max)}.` : `On-target fraction varies with the off-target background of the capture; no lab reference is supplied to compare it with.`),
+    noteRow('info', 'share of cell', `Share of the reads of the sample's SMRT Cell among the samples of that cell <b>in this report</b>; the tick marks an even split. It shows pooling balance, so it is only computed within one cell. Samples combining several cells (top-ups) have none.`),
+    REF ? noteRow('info', 'target share', `"low share vs reference" = a target's share of the sample's on-target reads is below ${num(TQC.share_ratio_warn, 2)}× the median of the lab reference <b>${esc(REF.name)}</b> (${grp(REF.n_samples)} samples). Depth-independent, so it applies equally to every cell and run.`)
+        : noteRow('caution', 'target share', `No lab target-share reference is supplied, so targets are judged on absolute reads only in this report. Each sample report compares with its own SMRT Cell when that cell has enough samples.`),
+  ];
+  document.getElementById('qc-notes').innerHTML = notesCard(notes, 'qcnote');
+  document.getElementById('src-qc').innerHTML = src('qc');
+})();
+
+// ══ 03 — CARRIER TARGETS ═════════════════════════════════════════════════════
+(function() {
+  // run median over ALL samples (ptcp-qc aggregate), not only those with a sample JSON
+  const colMed = TARGETS.map(([k]) => { const ls = (DATA.locus_stats || {})[k]; return ls && ls.coverage_stats ? ls.coverage_stats.median : median(S.map(s => (s.loci || {})[k])); });
+  const cell = (s, k) => {
+    const n = (s.loci || {})[k];
+    if (!s.has_sample_json) return '<td class="cov"><span class="fail">—</span></td>';
+    const callable = s.callable ? CALLERS[k].every(c => s.callable[c]) : null;
+    const r = REF && REF.targets[k], sh = (s.target_shares || {})[k];
+    const ratio = r && r.median && sh != null ? sh / r.median : null;
+    return `<td class="cov"><span class="${locusState(n)}">${grp(n)}</span>${callable === false ? '<div class="cell-sub" style="color:var(--red)">no call</div>' : ''}${
+      ratio != null && ratio < TQC.share_ratio_warn ? `<div class="cell-sub" style="color:var(--gold)">${num(ratio, 2)}× ref</div>` : ''}</td>`;
+  };
+  document.getElementById('tg-matrix').innerHTML = `
+    <div class="compare-header"><span class="compare-header-title">Reads per carrier target</span>
+      <span class="compare-header-sub">HiFi + fail reads · warn &lt; ${TQC.locus_reads_warn} · fail &lt; ${TQC.locus_reads_fail} · "no call" = the caller produced no result${REF ? ` · "×ref" = share below ${num(TQC.share_ratio_warn, 2)}× the reference` : ''}</span></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Sample</th>${TARGETS.map(([, l]) => `<th class="c">${esc(l)}</th>`).join('')}</tr></thead>
+    <tbody>${[...S].sort(byCell).map(s => `<tr><td class="npn">${esc(s.id)}<div class="cell-sub">${(s.cells || []).map(esc).join(' + ') || '—'}</div></td>${TARGETS.map(([k]) => cell(s, k)).join('')}</tr>`).join('')}
+      <tr style="background:rgba(0,0,0,0.15)"><td class="bold">median reads<div class="cell-sub">all samples here</div></td>${colMed.map(v => `<td class="c bold">${v == null ? '—' : grp(Math.round(v))}</td>`).join('')}</tr>
+      ${REF ? `<tr style="background:rgba(0,0,0,0.15)"><td class="bold">reference share<div class="cell-sub">${esc(REF.name)}</div></td>${TARGETS.map(([k]) => { const r = REF.targets[k];
+        return `<td class="c">${r ? `${pct(r.median)}<div class="cell-sub">${pct(r.min)}–${pct(r.max)}</div>` : '—'}</td>`; }).join('')}</tr>` : ''}
+    </tbody></table></div>`;
+  const notes = [
+    noteRow('info', 'reading the matrix', `A column low across the run points at the capture (probe / guide design or a run problem); a row low across targets points at the sample.`),
+    noteRow('info', 'callability', `"no call" means ptcp-qc carries no result for that caller (no SMN1 copy number, no Paraphase total CN, no F8 genotype, no TRGT allele with reads). It says nothing about what a call would be.`),
+  ];
+  document.getElementById('tg-notes').innerHTML = notesCard(notes, 'tgnote');
+  document.getElementById('src-targets').innerHTML = src('qc');
+})();
+
+// ══ 04 — ALL ptcp-qc LOCI ════════════════════════════════════════════════════
+(function() {
+  const ls = DATA.locus_stats || {};
+  const targetSet = new Set(TARGETS.map(t => t[0]));
+  const rows = Object.entries(ls).sort((a, b) => (b[1].total_reads || 0) - (a[1].total_reads || 0)).map(([k, v]) => {
+    const kind = targetSet.has(k) ? badge('carrier target', 'info', true) : ['off-target', 'unmapped'].includes(k) ? badge(k, 'nd', true) : badge('repeat panel (not captured)', 'nd', true);
+    const c = v.coverage_stats || {};
+    return `<tr><td class="bold">${esc(k)}</td><td>${kind}</td><td class="r">${grp(v.samples_with_coverage)} / ${grp(S.length)}</td><td class="r">${grp(v.total_reads)}</td>
+      <td class="r">${grp(c.min)}</td><td class="r">${grp(c.median)}</td><td class="r">${grp(c.max)}</td></tr>`;
+  }).join('');
+  document.getElementById('loci-table').innerHTML = `
+    <div class="compare-header"><span class="compare-header-title">qc.aggregate.json locus_stats</span><span class="compare-header-sub">run-level, no sample identities</span></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Locus</th><th>Kind</th><th class="r">Samples with reads</th><th class="r">Total reads</th>
+      <th class="r">Min</th><th class="r">Median</th><th class="r">Max</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const notes = [noteRow('info', 'off-target loci', `The ptcp-qc BED includes the repeat expansion panel 2.0 loci. On a carrier run they collect only stray reads; they are listed for completeness and to show the off-target background.`)];
+  document.getElementById('loci-notes').innerHTML = notesCard(notes, 'locinote');
+  document.getElementById('src-loci').innerHTML = src('qc');
+})();
+
+<!--SCROLLSPY-->
+</script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+# Conda env for the PTCP-specific steps (see env/build_ptcp_env.sh, which also
+# adds the ptcp-qc binary).
+#
+# Used by: trgt5_ptcp_repeatReads, f8inversion_ptcp, ptcpQC
+# Called by full path from other steps (<env>/bin/): pbindex (both pbmm2
+# steps), minimap2 (Sawfish HBA step)
+#
+# The PTCP scripts come from the lrsCustomTools release and run with this
+# env's python3; the packages below are what they import.
+# samtools and bcftools are deliberately not included: they come from PATH,
+# as in the germline pipeline.
+name: ptcp
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  - pysam          # f8_inversion.py
+  - numpy          # smn_homology
+  - pandas         # smn_homology
+  - scipy          # smn_homology
+  - scikit-learn   # smn_homology
+  - pbtk           # pbindex
+  - minimap2       # HBA realignment before Sawfish

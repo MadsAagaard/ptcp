@@ -1,0 +1,980 @@
+<!DOCTYPE html>
+<!--
+  ptcp_sample_report_template.html — 261015
+  ──────────────────────────────────────────────────────────────────────────────
+  Self-contained single-file HTML template for the PTCP (PureTarget Carrier
+  Panel) PER-SAMPLE report. Visual system inherited from the germline template
+  (germline_dna_summary_report_template.html).
+
+  ONE SAMPLE PER REPORT
+  ─────────────────────
+  A clinical interpreter opens one sample's report and sees nothing about any
+  other sample. The payload (ptcp_report_collector.py) holds only this sample's
+  ptcp-qc / havanno data plus anonymous comparison figures (the lab target-share
+  reference, or median and IQR of the other samples on the same SMRT Cell).
+  Run-wide QC with sample identities is a separate report
+  (<sheet>.PTCP.runQC.html) linked from section 01.
+
+  INJECTION POINT
+  ───────────────
+  ptcp_report_collector.py replaces the line under the sentinel comment with the
+  sample JSON (re.sub with a lambda replacement). This comment reproduces
+  neither the sentinel nor the declaration.
+
+  SECTIONS
+  ────────
+  01  Sample QC              ptcp-qc stats, aggregate sample_stats, target shares vs reference / same-cell batch
+  02  SMN1 / SMN2            paraphase_results.smn1.smn_info (+ homology_adjustment)
+  03  GBA1, CYP21A2, HBB, RPGR   Paraphase total CN + havanno per haplotype
+  04  HBA1/2                 Paraphase genotype + Sawfish breakpoints + genotype_adjusted
+  05  F8 inversions          f8_info (int1, int22)
+  06  Repeat expansions      trgt_results: FMR1, FXN, AFF2, ARX (two tracts)
+
+  The collector emits numbers; every threshold, verdict and sentence is here.
+  Thresholds are placeholders until DATA.thresholds carries approved_by and
+  approved_date.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PTCP Sample Report</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --navy:    #0c0d0f;
+    --navy2:   #141619;
+    --navy3:   #1d2024;
+    --slate:   #3a4046;
+    --accent:  #5aa9f0;
+    --gold:    #e9b949;
+    --red:     #e0655f;
+    --green:   #57c98a;
+    --muted:   #8a9199;
+    --border:  rgba(255,255,255,0.10);
+    --text:    #eceef0;
+    --text2:   #b6bcc4;
+    --card-bg: #141619;
+    --mono:    'IBM Plex Mono', monospace;
+    --serif:   'Fraunces', serif;
+    --sans:    'DM Sans', sans-serif;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--navy); color: var(--text);
+    font-family: var(--sans); font-weight: 300; font-size: 14px; line-height: 1.6;
+    display: flex; flex-direction: row; min-height: 100vh;
+  }
+
+  /* ── Sidebar ── */
+  aside {
+    position: sticky; top: 0; height: 100vh;
+    width: 280px; flex-shrink: 0;
+    background: var(--navy2); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; padding: 0; overflow-y: auto;
+  }
+  .logo-block { padding: 20px 20px 18px; border-bottom: 1px solid var(--border); }
+  .logo-dept-name {
+    font-family: var(--mono); font-size: 20px; font-weight: 600;
+    letter-spacing: 1.5px; text-transform: uppercase; white-space: nowrap;
+    color: var(--accent); margin-bottom: 8px;
+  }
+  .logo-dept-sub { font-family: var(--mono); font-size: 11px; color: var(--muted); line-height: 1.75; }
+  .logo-assay {
+    margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border);
+    font-family: var(--mono); font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--gold);
+  }
+  nav { padding: 16px 0 8px; }
+  nav a {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 20px; font-size: 12px; font-weight: 400;
+    color: var(--muted); text-decoration: none;
+    letter-spacing: 0.3px; border-left: 2px solid transparent; transition: all 0.2s;
+  }
+  nav a:hover, nav a.active { color: var(--text); background: rgba(90,169,240,0.07); border-left-color: var(--accent); }
+  nav a .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--slate); flex-shrink: 0; transition: background 0.2s; }
+  nav a:hover .dot, nav a.active .dot { background: var(--accent); }
+  .nav-group-label {
+    font-family: var(--mono); font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase;
+    color: var(--muted); padding: 14px 20px 6px; opacity: 0.8;
+  }
+
+  /* ── Sample picker (sidebar) ── */
+  .sample-list { padding: 0 0 20px; flex: 1; }
+  .sample-pick {
+    display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 10px;
+    width: 100%; text-align: left; border: none; background: transparent; cursor: pointer;
+    padding: 7px 20px; border-left: 2px solid transparent;
+    font-family: var(--mono); font-size: 12px; color: var(--muted); transition: all 0.15s;
+  }
+  .sample-pick:hover { color: var(--text); background: rgba(90,169,240,0.05); }
+  .sample-pick.sel { color: var(--text); background: rgba(90,169,240,0.10); border-left-color: var(--accent); }
+  .sample-pick .sx { font-size: 10px; color: var(--muted); }
+  .qdot { width: 8px; height: 8px; border-radius: 50%; }
+  .qdot.pass { background: var(--green); } .qdot.warn { background: var(--gold); } .qdot.fail { background: var(--red); }
+
+  /* ── Main ── */
+  main { flex: 1; min-width: 0; padding: 48px 64px 80px; max-width: 1400px; }
+  .mock-banner {
+    margin-bottom: 28px; padding: 10px 16px; border-radius: 8px;
+    background: rgba(233,185,73,0.08); border: 1px dashed rgba(233,185,73,0.45);
+    font-family: var(--mono); font-size: 11px; color: var(--gold); line-height: 1.7;
+  }
+
+  /* ── Page header ── */
+  .page-header { margin-bottom: 48px; padding-bottom: 28px; border-bottom: 1px solid var(--border); }
+  .page-header .tag {
+    font-family: var(--mono); font-size: 13px; letter-spacing: 2.5px;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 14px;
+  }
+  .page-header h1 {
+    font-family: var(--mono); font-size: 28px; font-weight: 600;
+    color: var(--text); line-height: 1.2; margin-bottom: 20px; letter-spacing: -0.5px;
+  }
+  .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-top: 20px; }
+  .meta-item { display: flex; flex-direction: column; gap: 3px; }
+  .meta-label { font-family: var(--mono); font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--accent); }
+  .meta-value { font-family: var(--mono); font-size: 16px; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+
+  /* ── Sections ── */
+  section { margin-bottom: 56px; scroll-margin-top: 32px; }
+  .section-header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 20px; }
+  .section-num { font-family: var(--mono); font-size: 11px; color: var(--accent); font-weight: 600; letter-spacing: 1px; }
+  h2 { font-family: var(--serif); font-size: 22px; font-weight: 600; color: var(--text); letter-spacing: -0.3px; }
+
+  /* ── Cards & KV ── */
+  .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .card + .card { margin-top: 12px; }
+  .stack { display: flex; flex-direction: column; gap: 12px; }
+  .kv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0; }
+  .kv-item { padding: 16px 20px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  .kv-item:last-child { border-right: none; }
+  .kv-label { font-family: var(--mono); font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); margin-bottom: 5px; }
+  .kv-value { font-size: 16px; font-weight: 500; color: var(--text); font-family: var(--mono); }
+  .kv-value.large { font-size: 22px; font-weight: 600; }
+  .kv-value.muted-val { color: var(--muted); }
+  .kv-value.cn-val  { color: var(--accent); font-size: 26px; }
+  .kv-value.dev-val { color: var(--gold);   font-size: 26px; }
+  .kv-sub { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 2px; }
+  .kv-sub.warn { color: var(--gold); }
+  .kv-sub.ok   { color: var(--green); }
+  .kv-sub.bad  { color: var(--red); }
+
+  /* ── Badges ── */
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 10px; border-radius: 4px; white-space: nowrap;
+    font-family: var(--mono); font-size: 11px; font-weight: 600;
+    letter-spacing: 0.5px; text-transform: uppercase;
+  }
+  .badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0.8; }
+  .badge-pass { background: rgba(87,201,138,0.15);  color: var(--green); }
+  .badge-fail { background: rgba(224,101,95,0.15);   color: var(--red); }
+  .badge-warn { background: rgba(233,185,73,0.15);  color: var(--gold); }
+  .badge-info { background: rgba(90,169,240,0.15);  color: var(--accent); }
+  .badge-nd   { background: rgba(138,145,153,0.15); color: var(--muted); }
+  .badge-gated { background: rgba(138,145,153,0.10); color: var(--muted); border: 1px dashed rgba(138,145,153,0.5); }
+  .badge-gated::before { background: transparent; border: 1px solid currentColor; opacity: 0.7; }
+  .badge.sm { font-size: 9px; padding: 2px 7px; }
+  .badge.kc { text-transform: none; letter-spacing: 0.2px; }   /* genotypes: α must not become A */
+
+  /* ── Tables ── */
+  .tbl-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead tr { background: var(--navy3); border-bottom: 1px solid var(--border); }
+  th { padding: 10px 14px; text-align: left; font-family: var(--mono); font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); font-weight: 600; white-space: nowrap; }
+  th.r, td.r { text-align: right; }
+  th.c, td.c { text-align: center; }
+  tbody tr { border-bottom: 1px solid var(--border); transition: background 0.15s; }
+  tbody tr:hover { background: rgba(90,169,240,0.05); }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr.pick { cursor: pointer; }
+  tbody tr.sel { background: rgba(90,169,240,0.09); box-shadow: inset 2px 0 0 var(--accent); }
+  td { padding: 10px 14px; color: var(--text2); font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+  td.npn { font-size: 13px; font-weight: 600; color: var(--text); }
+  td.bold { font-weight: 600; color: var(--text); }
+  .cell-sub { font-family: var(--mono); font-size: 9px; color: var(--muted); margin-top: 1px; }
+  .cn { font-size: 15px; font-weight: 600; color: var(--text); }
+  .cn.dev { color: var(--gold); }
+  .cn.zero { color: var(--red); }
+  .cn.nc { color: var(--muted); }
+
+  /* ── Locus coverage matrix ── */
+  td.cov { text-align: center; font-size: 11px; }
+  td.cov span { display: inline-block; min-width: 54px; padding: 3px 6px; border-radius: 3px; }
+  td.cov .ok   { background: rgba(87,201,138,0.10); color: var(--text2); }
+  td.cov .warn { background: rgba(233,185,73,0.18); color: var(--gold); font-weight: 600; }
+  td.cov .fail { background: rgba(224,101,95,0.20); color: var(--red); font-weight: 600; }
+
+  /* ── Share-of-run bars (Kinnex pattern) ── */
+  .share-wrap { display: flex; align-items: center; gap: 10px; }
+  .share-track { position: relative; width: 96px; height: 6px; background: var(--navy3); border-radius: 3px; flex-shrink: 0; }
+  .share-fill { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 3px; background: linear-gradient(90deg, var(--accent), #86c4ff); }
+  .share-fill.low { background: linear-gradient(90deg, #e08a4a, var(--gold)); }
+  .share-even { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--muted); opacity: 0.6; }
+
+  /* ── Composition bar (F8 read classes) ── */
+  .fbar { display: flex; height: 12px; border-radius: 3px; overflow: hidden; background: var(--navy3); }
+  .fbar span { display: block; height: 100%; }
+  .fbar-legend { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-top: 10px; font-family: var(--mono); font-size: 10px; color: var(--muted); }
+  .fbar-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; font-style: normal; }
+  .fbar-legend b { font-weight: 600; color: var(--text2); }
+  .pad { padding: 14px 16px; }
+
+  /* ── Compare header / foldable cards ── */
+  .compare-header { padding: 10px 16px; background: var(--navy3); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .compare-header-title { font-family: var(--mono); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text); font-weight: 600; }
+  .compare-header-sub { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+  .spacer { margin-left: auto; }
+  .reg-toggle {
+    display: flex; align-items: center; gap: 10px;
+    width: 100%; text-align: left; border: none; cursor: pointer; user-select: none;
+    padding: 11px 16px; background: var(--navy3);
+    border-bottom: 1px solid var(--border); transition: color 0.15s;
+  }
+  .reg-toggle:not(.open) { border-bottom: none; }
+  .reg-toggle .arrow { transition: transform 0.2s; display: inline-block; color: var(--muted); font-size: 9px; }
+  .reg-toggle.open .arrow { transform: rotate(90deg); }
+  .reg-toggle:hover .compare-header-title { color: var(--accent); }
+  .subsec-body { display: none; }
+  .subsec-body.visible { display: block; }
+  .gene-chip { display: inline-block; margin: 0 3px 0 0; padding: 1px 7px; border-radius: 3px; background: rgba(90,169,240,0.1); border: 1px solid rgba(90,169,240,0.2); color: var(--text2); font-family: var(--mono); font-size: 10px; }
+  .var-chip {
+    display: inline-block; margin: 1px 3px 1px 0; padding: 1px 7px; border-radius: 3px;
+    font-family: var(--mono); font-size: 10px; white-space: nowrap;
+    color: var(--muted); background: rgba(138,145,153,0.10); border: 1px solid rgba(138,145,153,0.22);
+  }
+  .var-chip.hit { color: var(--red); background: rgba(224,101,95,0.12); border-color: rgba(224,101,95,0.35); }
+  .links-line { padding: 10px 16px; background: rgba(0,0,0,0.12); border-top: 1px solid var(--border); font-family: var(--mono); font-size: 10px; color: var(--muted); word-break: break-all; }
+  .links-line a { color: var(--accent); text-decoration: none; }
+  .links-line a:hover { text-decoration: underline; }
+  .links-key { color: var(--accent); margin-right: 10px; letter-spacing: 1px; text-transform: uppercase; font-size: 9px; }
+
+  /* ── Selected-sample banner (sections 03-06) ── */
+  .sel-banner {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    margin: 18px 0 12px; padding: 10px 16px; border-radius: 8px;
+    background: rgba(90,169,240,0.06); border: 1px solid rgba(90,169,240,0.22);
+    font-family: var(--mono); font-size: 11px; color: var(--text2);
+  }
+  .sel-banner b { color: var(--text); font-size: 14px; }
+  .sel-banner .lab { font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--accent); }
+  .nav-btn {
+    border: 1px solid var(--border); background: var(--navy3); color: var(--text2);
+    font-family: var(--mono); font-size: 11px; border-radius: 4px; padding: 3px 10px; cursor: pointer;
+  }
+  .nav-btn:hover { color: var(--text); border-color: var(--accent); }
+
+  /* ── Interpretation ── */
+  .interp-body { padding: 15px 18px; font-family: var(--sans); font-size: 13px; line-height: 1.72; color: var(--text2); }
+  .interp-body b { font-weight: 500; color: var(--text); }
+  .interp-lede { display: block; font-family: var(--mono); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 7px; }
+  .interp-lede.agree    { color: var(--green); }
+  .interp-lede.partial  { color: var(--accent); }
+  .interp-lede.conflict { color: var(--gold); }
+  .interp-lede.bad      { color: var(--red); }
+
+  /* ── Integrity checks (Kinnex pattern) ── */
+  .checks { margin-top: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--card-bg); overflow: hidden; }
+  .check-row { display: flex; align-items: center; gap: 10px; padding: 9px 16px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 11px; color: var(--text2); }
+  .check-row:last-child { border-bottom: none; }
+  .check-detail { color: var(--muted); margin-left: auto; text-align: right; }
+
+  /* ── Notes & caveats ── */
+  .notes-card { margin-top: 12px; }
+  .note-row {
+    display: grid; grid-template-columns: 26px 160px 1fr;
+    align-items: start; gap: 12px;
+    padding: 13px 18px; border-top: 1px solid var(--border);
+    font-family: var(--mono); font-size: 10px; line-height: 1.75;
+  }
+  .note-icon { font-size: 13px; text-align: center; line-height: 1.5; }
+  .note-src  { font-size: 9px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); padding-top: 2px; }
+  .note-row.caution { background: rgba(233,185,73,0.05); }
+  .note-row.caution .note-icon, .note-row.caution .note-body { color: var(--gold); }
+  .note-row.info    { background: rgba(90,169,240,0.04); }
+  .note-row.info    .note-icon, .note-row.info .note-body { color: var(--accent); }
+  .note-body b { font-weight: 600; }
+
+  .source-line { font-family: var(--mono); font-size: 9px; color: var(--muted); margin-top: 10px; letter-spacing: 0.5px; opacity: 0.75; }
+  .subsection-divider { font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); margin: 24px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  .empty-state { padding: 32px; text-align: center; color: var(--muted); }
+
+  @media (max-width: 1100px) {
+    body { flex-direction: column; }
+    aside { position: static; width: 100%; height: auto; }
+    main { padding: 32px 16px 64px; }
+    .note-row { grid-template-columns: 22px 1fr; }
+    .note-src { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+    html { scroll-behavior: auto; }
+  }
+</style>
+</head>
+<body>
+
+<aside>
+  <div class="logo-block">
+    <div class="logo-dept-name">Klinisk Genetik</div>
+    <div class="logo-dept-sub">Vejle Sygehus<br>Beriderbakken 4<br>7100 Vejle</div>
+    <div class="logo-assay">PureTarget · Carrier Panel</div>
+  </div>
+  <nav id="sidebar-nav">
+    <a href="#s-qc"><span class="dot"></span>Sample QC</a>
+    <a href="#s-smn"><span class="dot"></span>SMN1 / SMN2</a>
+    <a href="#s-genes"><span class="dot"></span>GBA1 · CYP21A2 · HBB · RPGR</a>
+    <a href="#s-hba"><span class="dot"></span>HBA1 / HBA2</a>
+    <a href="#s-f8"><span class="dot"></span>F8 Inversions</a>
+    <a href="#s-tr"><span class="dot"></span>Repeat Expansions</a>
+  </nav>
+</aside>
+
+<main>
+  <div id="top-banner"></div>
+  <div class="page-header">
+    <div class="tag">PTCP Sample Report</div>
+    <h1 id="title"></h1>
+    <div class="meta-grid" id="meta-grid"></div>
+  </div>
+
+  <section id="s-qc">
+    <div class="section-header"><span class="section-num">01</span><h2>Sample QC</h2></div>
+    <div class="card" id="qc-tiles"></div>
+    <div class="subsection-divider">Reads per carrier target — this sample against the comparison</div>
+    <div class="card" id="qc-targets"></div>
+    <div id="qc-notes"></div>
+    <div class="source-line" id="src-qc"></div>
+  </section>
+
+  <section id="s-smn">
+    <div class="section-header"><span class="section-num">02</span><h2>SMN1 / SMN2</h2></div>
+    <div class="stack" id="smn"></div>
+    <div id="smn-notes"></div>
+    <div class="source-line" id="src-smn"></div>
+  </section>
+
+  <section id="s-genes">
+    <div class="section-header"><span class="section-num">03</span><h2>GBA1 · CYP21A2 · HBB · RPGR</h2></div>
+    <div class="stack" id="genes"></div>
+    <div id="genes-notes"></div>
+    <div class="source-line" id="src-genes"></div>
+  </section>
+
+  <section id="s-hba">
+    <div class="section-header"><span class="section-num">04</span><h2>HBA1 / HBA2 — Paraphase &amp; Sawfish</h2></div>
+    <div class="stack" id="hba"></div>
+    <div id="hba-notes"></div>
+    <div class="source-line" id="src-hba"></div>
+  </section>
+
+  <section id="s-f8">
+    <div class="section-header"><span class="section-num">05</span><h2>F8 Intron 1 &amp; 22 Inversions</h2></div>
+    <div class="stack" id="f8"></div>
+    <div id="f8-notes"></div>
+    <div class="source-line" id="src-f8"></div>
+  </section>
+
+  <section id="s-tr">
+    <div class="section-header"><span class="section-num">06</span><h2>Repeat Expansions — FMR1, FXN, AFF2, ARX</h2></div>
+    <div class="stack" id="tr"></div>
+    <div id="tr-notes"></div>
+    <div class="source-line" id="src-tr"></div>
+  </section>
+</main>
+
+<script>
+// ── DATA — injected by ptcp_report_collector.py ──────────────────────────────
+/* DATA_INJECT */
+const DATA = {};
+
+const TEMPLATE_VERSION = '261015';
+
+// ── Helpers (germline template primitives) ───────────────────────────────────
+function esc(s) {
+  if (s == null) return '—';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+// keepCase: genotypes such as αα/αα must not be upper-cased to AA/AA
+function badge(text, cls, sm, keepCase) { return `<span class="badge badge-${cls}${sm ? ' sm' : ''}${keepCase ? ' kc' : ''}">${esc(text)}</span>`; }
+function kvi(label, value, sub, subCls) {
+  return `<div class="kv-item"><div class="kv-label">${label}</div><div class="kv-value">${value}</div>
+    ${sub ? `<div class="kv-sub${subCls ? ' ' + subCls : ''}">${sub}</div>` : ''}</div>`;
+}
+function kviL(label, value, sub, subCls, valCls) {
+  return `<div class="kv-item"><div class="kv-label">${label}</div>
+    <div class="kv-value large${valCls ? ' ' + valCls : ''}">${value}</div>
+    ${sub ? `<div class="kv-sub${subCls ? ' ' + subCls : ''}">${sub}</div>` : ''}</div>`;
+}
+function src(key) {
+  const s = DATA._sources && DATA._sources[key];
+  return s ? `&#9432;&nbsp;${esc(s)}` : '';
+}
+function noteRow(kind, source, body) {
+  const icon = kind === 'caution' ? '&#9888;' : '&#9432;';
+  return `<div class="note-row ${kind}"><div class="note-icon">${icon}</div>
+    <div class="note-src">${esc(source)}</div><div class="note-body">${body}</div></div>`;
+}
+function notesCard(rows, prefix) {
+  if (!rows.length) return '';
+  const nCaution = rows.filter(r => r.indexOf('note-row caution') !== -1).length;
+  return `<div class="card notes-card">
+    <button class="reg-toggle" id="${prefix}-toggle-0" onclick="toggleSubsec('${prefix}', 0)">
+      <span class="arrow">&#9654;</span>
+      <span class="compare-header-title">Notes &amp; Caveats</span>
+      <span class="compare-header-sub">${rows.length} item${rows.length > 1 ? 's' : ''}</span>
+      <span class="spacer"></span>
+      ${nCaution ? badge(`${nCaution} caution`, 'warn') : badge('info only', 'nd')}
+    </button>
+    <div class="subsec-body" id="${prefix}-body-0">${rows.join('')}</div>
+  </div>`;
+}
+function toggleSubsec(prefix, idx) {
+  const toggle = document.getElementById(prefix + '-toggle-' + idx);
+  const body   = document.getElementById(prefix + '-body-'   + idx);
+  if (!toggle || !body) return;
+  const open = body.classList.toggle('visible');
+  toggle.classList.toggle('open', open);
+}
+function interp(lede, ledeCls, body) {
+  return `<div class="interp-body"><span class="interp-lede ${ledeCls}">${lede}</span>${body}</div>`;
+}
+function conclusion(title, call) {
+  return `<div class="compare-header" style="border-top:1px solid var(--border)">
+      <span class="compare-header-title">Conclusion</span>
+      <span class="compare-header-sub">${title}</span><span class="spacer"></span>${badge(call.txt, call.cls, false, call.kc)}
+    </div>${interp('Interpretation', call.lede, call.body)}`;
+}
+function num(v, d) { return v == null ? '—' : Number(v).toFixed(d == null ? 1 : d); }
+function grp(v)  { return v == null ? '—' : Number(v).toLocaleString('en'); }
+function pct(f, d) { return f == null ? '—' : `${(100 * f).toFixed(d == null ? 1 : d)}%`; }
+// ptcp-qc reports read accuracy in percent (99.995); readers think in Q.
+function qOf(acc) {
+  if (acc == null) return null;
+  const err = 1 - acc / 100;
+  return err <= 0 ? 60 : Math.min(60, -10 * Math.log10(err));
+}
+function median(a) {
+  const s = a.filter(v => v != null).slice().sort((x, y) => x - y);
+  if (!s.length) return null;
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+// ── Thresholds (configuration; placeholders until approved) ──────────────────
+const THRESHOLDS = (DATA.thresholds && typeof DATA.thresholds === 'object') ? DATA.thresholds : {};
+const TH_APPROVED = !!(THRESHOLDS.approved_by && THRESHOLDS.approved_date);
+function thresholdsFor(section, builtins) { return Object.assign({}, builtins, THRESHOLDS[section] || {}); }
+function thresholdNote(criteria) {
+  return TH_APPROVED
+    ? noteRow('info', 'thresholds', `Acceptance criteria (${criteria}) are this laboratory's own, read from <code>${esc(THRESHOLDS.source_file || 'the thresholds file')}</code> and approved by <b>${esc(THRESHOLDS.approved_by)}</b> on <b>${esc(THRESHOLDS.approved_date)}</b>.`)
+    : noteRow('caution', 'thresholds', `The thresholds shown (${criteria}) are <b>placeholders</b>, not this laboratory's acceptance criteria. They become criteria once the collector's thresholds file carries <code>approved_by</code> and <code>approved_date</code>.`);
+}
+const TQC  = thresholdsFor('qc',  { locus_reads_fail: 50, locus_reads_warn: 150, on_target_frac_warn: 0.10, read_q_warn: 30, share_ratio_warn: 0.5 });
+const TSEX = thresholdsFor('sex', { y_xy_min: 0.15, y_xx_max: 0.05, x_xx_min: 0.75, x_xy_max: 0.65 });
+const TPP  = thresholdsFor('paraphase', {
+  smn1_expected: 2,
+  // pseudogene-like when ANY limit is reached (see section 03)
+  hap_class: { gba: { min_del: 500, min_patho: 10, min_pseudo: 10 }, cyp21: { min_del: 64, min_patho: 10, min_pseudo: 10 }, hbb: null, rpgr: null },
+  total_cn_expected: { gba: 4, cyp21: 4, hbb: 2, rpgr: { M: 1, K: 2 } },
+});
+// Repeat classes in UNITS of the counted motif(s): count = indexes into TRGT
+// motif_count. FMR1 CGG:AGG counts both (clinical sizing), FXN A:GAA counts GAA.
+const TTR  = thresholdsFor('trgt', {
+  FXS_FMR1:   { gene: 'FMR1', unit: 'CGG', count: [0, 1], interruption: 1, xlinked: true,
+                classes: [[0, 44, 'normal', 'pass'], [45, 54, 'intermediate', 'info'], [55, 200, 'premutation', 'warn'], [201, 1e9, 'full mutation', 'fail']] },
+  FRDA_FXN:   { gene: 'FXN',  unit: 'GAA', count: [1], xlinked: false,
+                classes: [[0, 33, 'normal', 'pass'], [34, 65, 'premutation', 'warn'], [66, 1e9, 'full penetrance', 'fail']] },
+  FRAXE_AFF2: { gene: 'AFF2', unit: 'GCC', count: [0], xlinked: true,
+                classes: [[0, 39, 'normal', 'pass'], [40, 60, 'intermediate', 'info'], [61, 200, 'premutation', 'warn'], [201, 1e9, 'full mutation', 'fail']] },
+  EIEE1_ARX:  { gene: 'ARX', tract: 'PA1', unit: 'GCN', what: 'polyalanine tract 1', count: [0], xlinked: true,
+                classes: [[0, 16, 'normal', 'pass'], [17, 1e9, 'expanded', 'warn']] },
+  PRTS_ARX:   { gene: 'ARX', tract: 'PA2', unit: 'GCN', what: 'polyalanine tract 2', count: [0], xlinked: true,
+                classes: [[0, 12, 'normal', 'pass'], [13, 1e9, 'expanded', 'warn']] },
+});
+Object.entries(TTR).forEach(([k, c]) => { if (c.tract) c.gene = `${c.gene} ${c.tract}`; });
+
+// Carrier targets (ptcp-qc locus groups), in display order.
+const TARGETS = THRESHOLDS.carrier_targets || [
+  ['smn1', 'SMN1/2'], ['gba', 'GBA1'], ['cyp21', 'CYP21A2'], ['hba', 'HBA1/2'], ['hbb', 'HBB'], ['rpgr', 'RPGR'],
+  ['f8inv1', 'F8 int1'], ['f8inv22', 'F8 int22'], ['FXS_FMR1', 'FMR1'], ['FRDA_FXN', 'FXN'], ['AFF2', 'AFF2'], ['ARX', 'ARX'],
+];
+
+// ── Sample QC verdict (shared by both reports) ───────────────────────────────
+const VERDICT_TXT = { pass: 'pass', warn: 'review', fail: 'fail', nd: 'no data' };
+const VERDICT_CLS = { pass: 'pass', warn: 'warn', fail: 'fail', nd: 'gated' };
+function locusState(n) { return n == null || n < TQC.locus_reads_fail ? 'fail' : n < TQC.locus_reads_warn ? 'warn' : 'ok'; }
+function sexCheck(ratios, sexReported) {
+  const r = ratios || {};
+  let data = null;
+  if (r.ratio_y_auto != null && r.ratio_x_auto != null) {
+    if (r.ratio_y_auto >= TSEX.y_xy_min && r.ratio_x_auto <= TSEX.x_xy_max) data = 'M';
+    else if (r.ratio_y_auto <= TSEX.y_xx_max && r.ratio_x_auto >= TSEX.x_xx_min) data = 'K';
+    else data = '?';
+  }
+  const state = data == null ? 'nd' : data === '?' ? 'warn' : data === sexReported ? 'ok' : 'fail';
+  return { data, state, r };
+}
+// qc: { total_reads, on_target{total}, on_target_fraction, read_quality_median, sex_ratios }
+// loci: { group: n } or { group: { n } }
+// shares / compTargets (optional): the sample's target shares and the comparison's
+// { target: { median } }; a share below share_ratio_warn x the median adds a review issue.
+function sampleQC(qc, loci, sexReported, shares, compTargets, compLabel) {
+  const q = qc || {};
+  const nOf = v => v == null ? null : (typeof v === 'object' ? v.n : v);
+  const loc = TARGETS.map(([k]) => nOf((loci || {})[k]));
+  const sx = sexCheck(q.sex_ratios, sexReported);
+  const qv = qOf(q.read_quality_median);
+  const onFrac = q.on_target_fraction != null ? q.on_target_fraction
+               : (q.total_reads && q.on_target ? q.on_target.total / q.total_reads : null);
+  if (!loci || !Object.keys(loci).length) return { verdict: 'nd', issues: ['no ptcp-qc sample JSON'], minLoc: null, loc, sx, qv, onFrac };
+  const minLoc = Math.min(...loc.map(v => v == null ? 0 : v));
+  const issues = [];
+  let verdict = 'pass';
+  const lower = v => { if (verdict === 'pass') verdict = v; };
+  if (sx.state === 'fail') { verdict = 'fail'; issues.push('sex mismatch'); }
+  const low = TARGETS.filter((t, i) => loc[i] == null || loc[i] < TQC.locus_reads_fail).map(t => t[1]);
+  const weak = TARGETS.filter((t, i) => loc[i] != null && loc[i] >= TQC.locus_reads_fail && loc[i] < TQC.locus_reads_warn).map(t => t[1]);
+  if (low.length) { verdict = 'fail'; issues.push(`< ${TQC.locus_reads_fail} reads: ${low.join(', ')}`); }
+  if (weak.length) { lower('warn'); issues.push(`< ${TQC.locus_reads_warn} reads: ${weak.join(', ')}`); }
+  if (onFrac != null && onFrac < TQC.on_target_frac_warn) { lower('warn'); issues.push('low on-target'); }
+  if (qv != null && qv < TQC.read_q_warn) { lower('warn'); issues.push('low read Q'); }
+  if (shares && compTargets) {
+    const lowShare = TARGETS.filter(([k]) => compTargets[k] && compTargets[k].median && shares[k] != null
+                                         && shares[k] / compTargets[k].median < TQC.share_ratio_warn).map(t => t[1]);
+    if (lowShare.length) { lower('warn'); issues.push(`low share vs ${compLabel || 'comparison'}: ${lowShare.join(', ')}`); }
+  }
+  if (sx.state === 'warn') { lower('warn'); issues.push('sex ambiguous'); }
+  if (sx.state === 'nd') issues.push('no sex ratios');
+  return { verdict, issues, minLoc, loc, sx, qv, onFrac };
+}
+
+// ── Guard ────────────────────────────────────────────────────────────────────
+if (!DATA.metadata) {
+  document.getElementById('title').textContent = 'No data — inject JSON via ptcp_report_collector.py';
+  throw new Error('DATA stub detected — template not yet populated');
+}
+const M = DATA.metadata, PP = DATA.paraphase || {}, TR = DATA.trgt || {}, F = DATA.files || {};
+const SEX = M.sex_reported;                 // 'M' | 'K' from the sample sheet
+const MALE = SEX === 'M';
+const COMP = DATA.comparison || { source: 'none', reason: 'not provided by the collector' };
+const Q = sampleQC(DATA.qc, DATA.loci, SEX, DATA.target_shares, COMP.targets, COMP.source === 'reference' ? 'reference' : 'cell');
+function compText(C) {
+  if (C.source === 'reference') return `lab reference ${C.label} · ${C.n} validation samples · built ${C.created}`;
+  if (C.source === 'batch') return `the other ${C.n} samples of SMRT Cell ${C.label} in this run (leave-one-out median)`;
+  return `not compared — ${C.reason}`;
+}
+
+function fileLinks(kinds) {
+  return kinds.filter(k => F[k]).map(k => `<a href="${esc(F[k])}">${esc(F[k].split('/').filter(Boolean).pop())}</a>`).join(' &nbsp;·&nbsp; ') || '—';
+}
+function cardHead(title, chips, right) {
+  return `<div class="compare-header"><span class="compare-header-title">${title}</span>${(chips || []).map(c => `<span class="gene-chip">${esc(c)}</span>`).join('')}
+    <span class="spacer"></span>${qcGate()}${right || ''}</div>`;
+}
+// A sample that failed QC keeps its calls, but every call carries "QC fail".
+function qcGate() { return Q.verdict === 'fail' ? `<span title="${esc(Q.issues.join(' · '))}">${badge('QC fail', 'fail', true)}</span> ` : ''; }
+function missingCard(what) { return `<div class="card"><div class="empty-state">${what}</div></div>`; }
+
+// ── Header ───────────────────────────────────────────────────────────────────
+(function() {
+  document.title = `PTCP — ${M.id}`;
+  document.getElementById('title').textContent = M.id;
+  document.getElementById('meta-grid').innerHTML = [
+    ['Testlist', M.testlist], ['Sex (sheet)', SEX ? `${SEX} · ${SEX === 'M' ? 'male' : 'female'}` : null],
+    ['Sample QC', VERDICT_TXT[Q.verdict]], ['Run', M.samplesheet], ['Read mode', M.read_mode], ['Report date', M.report_date],
+  ].map(([l, v]) => `<div class="meta-item"><div class="meta-label">${l}</div><div class="meta-value">${esc(v)}</div></div>`).join('');
+  const b = [];
+  if (DATA._demo) b.push(`<div class="mock-banner">&#9888;&nbsp; ${DATA._demo}</div>`);
+  if ((M.inputs_missing || []).length)
+    b.push(`<div class="mock-banner" style="color:var(--red);border-color:rgba(224,101,95,0.5);background:rgba(224,101,95,0.07)">&#10007;&nbsp; Inputs missing for this sample: <b>${M.inputs_missing.map(esc).join(', ')}</b>. Sections built from them are empty — this report is incomplete.</div>`);
+  document.getElementById('top-banner').innerHTML = b.join('');
+})();
+
+// ══ 01 — SAMPLE QC ═══════════════════════════════════════════════════════════
+// Target shares (share of the sample's own on-target reads per target) are
+// depth-independent, so they are compared with the lab reference — or, without
+// one, with the other samples of the same SMRT Cell (leave-one-out median) —
+// whatever run or batch the sample was analysed in. Absolute read thresholds
+// stay per sample: they are the callability gate.
+(function() {
+  const q = DATA.qc || {}, sx = Q.sx, C = COMP, ct = C.targets || {};
+  const srcTxt = C.source === 'reference' ? 'reference' : C.source === 'batch' ? 'cell median' : null;
+  const sexSub = sx.state === 'nd' ? 'no X/Y ratios' : `X ${num(sx.r.ratio_x_auto, 2)} · Y ${num(sx.r.ratio_y_auto, 2)} → ${esc(sx.data)}`;
+  const cof = C.on_target_fraction;
+  document.getElementById('qc-tiles').innerHTML = `
+    <div class="compare-header"><span class="compare-header-title">ptcp-qc</span><span class="spacer"></span>${badge(VERDICT_TXT[Q.verdict], VERDICT_CLS[Q.verdict])}</div>
+    <div class="kv-grid">
+      ${kviL('Reads', grp(q.total_reads), q.on_target ? `mapped: HiFi ${grp((q.on_target.hifi || 0) + ((q.off_target || {}).hifi || 0))} · fail ${grp((q.on_target.fail || 0) + ((q.off_target || {}).fail || 0))}` : '', null, null)}
+      ${kviL('On-target', pct(Q.onFrac), cof && srcTxt ? `${srcTxt} ${pct(cof.median)} (${cof.spread === 'IQR' ? 'IQR ' : ''}${pct(cof.min, 0)}–${pct(cof.max, 0)})` : '', Q.onFrac != null && Q.onFrac < TQC.on_target_frac_warn ? 'warn' : null)}
+      ${kviL('Read length', q.read_length_median != null ? `${grp(q.read_length_median)} bp` : '—', 'median, mapped')}
+      ${kviL('Read Q', Q.qv != null ? `Q${num(Q.qv, 0)}` : '—', q.read_quality_median != null ? `median ${num(q.read_quality_median, 3)}%` : '', Q.qv != null && Q.qv < TQC.read_q_warn ? 'warn' : null)}
+      ${kviL('Sex check', esc(SEX) + ' &rarr; ' + esc(sx.data), sexSub, sx.state === 'fail' ? 'bad' : sx.state === 'warn' ? 'warn' : sx.state === 'ok' ? 'ok' : null,
+             sx.state === 'fail' ? 'dev-val' : null)}
+    </div>
+    ${Q.issues.length ? `<div class="links-line" style="color:var(--gold)"><span class="links-key">issues</span>${esc(Q.issues.join(' · '))}</div>` : ''}
+    <div class="links-line"><span class="links-key">compared with</span>${esc(compText(C))}</div>
+    <div class="links-line"><span class="links-key">sequenced</span>${(M.cells || []).length ? `SMRT Cell${M.cells.length > 1 ? 's' : ''} ${M.cells.map(esc).join(', ')}` : 'cell not recorded'}${(M.runs || []).length ? ` · run ${M.runs.map(esc).join(', ')}` : ''}
+      &nbsp;·&nbsp; analysed in ${esc(M.samplesheet)} · run-wide QC in <a href="${esc(M.run_qc_report)}">${esc(M.run_qc_report)}</a></div>`;
+
+  const sh = DATA.target_shares || {};
+  const rows = TARGETS.map(([k, label]) => {
+    const l = (DATA.loci || {})[k] || {}, st = locusState(l.n), r = ct[k];
+    const ratio = r && r.median && sh[k] != null ? sh[k] / r.median : null;
+    const low = ratio != null && ratio < TQC.share_ratio_warn;
+    return `<tr><td class="bold">${esc(label)}</td><td class="cov"><span class="${st}">${grp(l.n)}</span></td>
+      <td class="r">${grp(l.hifi)} / ${grp(l.fail)}</td>
+      <td class="r">${sh[k] != null ? pct(sh[k]) : '—'}</td>
+      ${srcTxt ? `<td class="r">${r ? `${pct(r.median)}<div class="cell-sub">${r.spread === 'IQR' ? 'IQR ' : ''}${pct(r.min)}–${pct(r.max)}</div>` : '—'}</td>
+      <td class="r"${low ? ' style="color:var(--gold);font-weight:600"' : ''}>${ratio != null ? `${num(ratio, 2)}×` : '—'}</td>` : ''}
+      <td class="r">${l.read_quality_median != null ? `Q${num(qOf(l.read_quality_median), 0)}` : '—'}</td>
+      <td class="r">${l.read_length_median != null ? `${grp(Math.round(l.read_length_median))} bp` : '—'}</td></tr>`;
+  }).join('');
+  document.getElementById('qc-targets').innerHTML = `
+    <div class="compare-header"><span class="compare-header-title">Carrier targets</span>
+      <span class="compare-header-sub">reads: warn &lt; ${TQC.locus_reads_warn} · fail &lt; ${TQC.locus_reads_fail} · ${srcTxt ? `share of on-target reads vs ${srcTxt}: review &lt; ${num(TQC.share_ratio_warn, 2)}×` : 'share of on-target reads (not compared)'}</span></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Target</th><th class="c">Reads</th><th class="r">HiFi / fail</th><th class="r">Share</th>
+      ${srcTxt ? `<th class="r">${esc(srcTxt)} share</th><th class="r">vs ${esc(srcTxt)}</th>` : ''}<th class="r">Read Q</th><th class="r">Read length</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+
+  const notes = [
+    thresholdNote(`target reads ≥ ${TQC.locus_reads_warn} (fail &lt; ${TQC.locus_reads_fail}), target share ≥ ${num(TQC.share_ratio_warn, 2)}× the comparison, on-target ≥ ${pct(TQC.on_target_frac_warn, 0)}, median read Q ≥ ${TQC.read_q_warn}, sex from X/Y ratios`),
+    noteRow('info', 'target share', `<b>Share</b> = the target's reads as a fraction of this sample's on-target reads (HiFi + fail). It does not depend on sequencing depth, so it is comparable across runs, batches and top-ups. A low share means this target was captured worse than usual in this sample, even when its absolute read count passes.`),
+    C.source === 'reference'
+      ? noteRow('info', 'comparison', `Compared with the lab reference <b>${esc(C.label)}</b>: per-target median and range of ${grp(C.n)} validation samples (built ${esc(C.created)}). It holds no sample identities.`)
+      : C.source === 'batch'
+        ? noteRow('caution', 'comparison', `No lab reference was supplied. Shares are compared with the median and interquartile range of the <b>other ${grp(C.n)} samples of SMRT Cell ${esc(C.label)}</b> in this run (this sample left out; no individual values are shown). It moves with whatever else was on the cell; a lab reference is the stable comparison.`)
+        : noteRow('caution', 'comparison', `Target shares are <b>not compared</b>: ${esc(C.reason)}. Only the absolute read thresholds apply.`),
+    C.version_mismatch ? noteRow('caution', 'reference', `This sample's ptcp-qc version (${esc(M.ptcp_qc_version)}) is not one the reference was built with (${(C.ptcp_qc_versions || []).map(esc).join(', ')}). Shares are only comparable with the same ptcp-qc version and targets BED.`) : null,
+    noteRow('caution', 'ptcp-qc coverage', `ptcp-qc's <code>pct_targets_ge_*</code> and <code>mean_coverage</code> count all 48 rows of its BED, including repeat-panel loci a carrier run does not capture, so they are not used here.`),
+    noteRow('info', 'sex', `Sex comes from the sample sheet and drives TRGT <code>--karyotype</code> and the F8 caller. A mismatch with the X/Y ratios invalidates the X-linked calls (FMR1, AFF2, ARX, RPGR, F8) until the sheet is corrected and the sample rerun.`),
+  ].filter(Boolean);
+  document.getElementById('qc-notes').innerHTML = notesCard(notes, 'qcnote');
+  document.getElementById('src-qc').innerHTML = src('qc');
+})();
+
+// ══ 02 — SMN1 / SMN2 ═════════════════════════════════════════════════════════
+// The call comes from Paraphase. The depth model (smn_homology) only replaces
+// it where Paraphase cannot count: every SMN1 copy identical AND every SMN2
+// copy identical (is_possible_homology), e.g. 1:1 that may be 2:2. Where
+// Paraphase resolved distinct haplotypes, its count stands and a model
+// disagreement is flagged for review, not applied.
+(function() {
+  const p = PP.smn1 || {};
+  const si = p.smn_info;
+  if (!p.present || !si) {
+    document.getElementById('smn').innerHTML = missingCard('No SMN result in the ptcp-qc report for this sample.');
+    return;
+  }
+  const ha = p.homology_adjustment, ok = !!(ha && ha.success);
+  const p1 = si.smn1_cn, p2 = si.smn2_cn;
+  const poss = ok && ha.is_possible_homology, agree = ok && ha.matches_paraphase;
+  const useAdj = poss && !agree;
+  const s1 = useAdj ? ha.adjusted_smn1_cn : p1, s2 = useAdj ? ha.adjusted_smn2_cn : p2;
+  const review = ok && !poss && !agree;
+  const rn = si.read_numbers || {};
+  let call;
+  if (s1 == null) call = { txt: 'No call', cls: 'gated', lede: 'bad', body: 'Paraphase issued no SMN1 copy number. <b>Absence of a finding is not evidence of absence.</b>' };
+  else if (s1 === 0) call = { txt: 'SMN1 CN 0', cls: 'fail', lede: 'bad', body: `No intact <b>SMN1</b> copy (CN 0; ${grp(rn.smn1)} SMN1 reads against ${grp(rn.smn2)} SMN2 reads), consistent with <b>homozygous SMN1 loss (SMA)</b>, not carrier status. SMN2 CN ${esc(s2)}. Confirm by MLPA / ddPCR.` };
+  else if (s1 === 1) call = { txt: 'SMA carrier — SMN1 CN 1', cls: 'warn', lede: 'conflict', body: `One intact <b>SMN1</b> copy: consistent with <b>SMA carrier status</b> (1+0). SMN2 CN ${esc(s2)}. Confirm by MLPA / ddPCR and offer partner testing.` };
+  else call = { txt: `SMN1 CN ${s1}`, cls: 'pass', lede: 'agree', body: `${s1} intact <b>SMN1</b> copies; a 1-copy carrier state is excluded. A <b>2+0 silent carrier</b> (both copies in <i>cis</i>) is <b>not excluded</b> by copy number. SMN2 CN ${esc(s2)}.` };
+  if (useAdj)
+    call.body = `<b>Copy number from the depth model.</b> All SMN1 copies and all SMN2 copies are identical, so Paraphase cannot count them and reported ${esc(p1)}:${esc(p2)}; the reads per copy (expected ${num(ha.predicted_coverage_per_copy, 0)} from the other targets) fit <b>${esc(s1)}:${esc(s2)}</b>. ` + call.body;
+  else if (poss && agree)
+    call.body += ` All SMN copies are identical, so Paraphase alone could not count them; the depth model confirms ${esc(p1)}:${esc(p2)}.`;
+  if (review) {
+    call.body += ` <b>Review:</b> the depth model gives ${esc(ha.adjusted_smn1_cn)}:${esc(ha.adjusted_smn2_cn)} instead. Paraphase resolved distinct haplotypes here, so its count stands; the disagreement points at uneven capture or a model that does not fit this sample.`;
+    call.txt += ' · review';
+    if (call.cls === 'pass') { call.cls = 'warn'; call.lede = 'conflict'; }
+  }
+  const smnHaps = (si.haplotypes || {});
+  const hapRole = n => (smnHaps.smn1 || []).includes(n) ? 'SMN1' : (smnHaps.smn2 || []).includes(n) ? 'SMN2' : (smnHaps.smn2_del78 || []).includes(n) ? 'SMN2Δ7–8' : '—';
+  const hits = (p.haplotypes || []).filter(h => hapRole(h.name) === 'SMN1' && h.havanno && h.havanno.pathogenic.length);
+  if (hits.length && s1 != null && s1 > 0) call.body += ` Reported SMN1 variant(s) on ${hits.map(h => `<b>${esc(h.name)}</b> (${h.havanno.pathogenic.map(esc).join(', ')})`).join('; ')} — review.`;
+
+  // depth model tile
+  let mVal, mSub, mSubCls = null, mValCls = 'muted-val';
+  if (!ha) { mVal = 'not run'; mSub = M.smn_model ? `model ${esc(M.smn_model)} supplied, but no result for this sample — check the ptcpQC log` : 'no SMN model supplied'; if (M.smn_model) mSubCls = 'warn'; }
+  else if (!ok) { mVal = 'no result'; mSub = `status: ${esc(ha.status || 'failed')}`; mSubCls = 'warn'; }
+  else {
+    mVal = `${ha.adjusted_smn1_cn} : ${ha.adjusted_smn2_cn}`; mValCls = 'cn-val';
+    mSub = useAdj ? 'identical copies — used for the call' : poss ? 'identical copies — confirms Paraphase' : agree ? 'distinct haplotypes — agrees' : 'distinct haplotypes — differs, review';
+    mSubCls = review ? 'warn' : useAdj ? 'warn' : 'ok';
+  }
+  const hm = h => ok && ha[h.name] ? ha[h.name] : null;
+  const sub = p.subgroups || {};
+  document.getElementById('smn').innerHTML = `<div class="card">
+    ${cardHead('SMN1 / SMN2', ['SMN1', 'SMN2'], `<span class="compare-header-sub">${grp(p.total_reads)} Paraphase read assignments · ${grp(p.unique_reads)} reads</span>`)}
+    <div class="kv-grid">
+      ${kviL('SMN1 CN', s1 == null ? '—' : s1, useAdj ? `Paraphase ${esc(p1)} → depth model` : `${grp(rn.smn1)} reads · Paraphase`, useAdj ? 'warn' : null, s1 == null ? 'muted-val' : s1 !== TPP.smn1_expected ? 'dev-val' : 'cn-val')}
+      ${kviL('SMN2 CN', s2 == null ? '—' : s2, useAdj ? `Paraphase ${esc(p2)} → depth model` : `${grp(rn.smn2)} reads · Paraphase`, useAdj ? 'warn' : null, s2 == null ? 'muted-val' : 'cn-val')}
+      ${kviL('SMN2&Delta;7–8 CN', si.smn2_del78_cn == null ? '—' : si.smn2_del78_cn, si.smn2_del78_cn == null ? 'not reported' : `${grp(rn.smn2_del78)} reads`, null, 'muted-val')}
+      ${kviL('Depth model SMN1 : SMN2', mVal, mSub, mSubCls, mValCls)}
+    </div>
+    <div class="compare-header" style="border-top:1px solid var(--border)"><span class="compare-header-title">Haplotypes</span>
+      <span class="compare-header-sub">ptcp-qc capture: SMN1 region ${grp((sub.smn1_v1 || {}).n)} reads · SMN2 region ${grp((sub.smn1_v1_pseudogene || {}).n)} reads${ok ? ` · depth model expects ${num(ha.predicted_coverage_per_copy, 0)} reads per copy` : ''}</span></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Haplotype</th><th>Gene</th><th class="c">Copies</th><th class="r">Reads</th><th class="r">Unique</th>
+      ${ok ? '<th class="r">Reads / copy</th><th class="r">obs / exp</th><th class="c">Model copies</th>' : ''}<th>Reported variants (havanno)</th></tr></thead><tbody>
+      ${(p.haplotypes || []).map(h => { const m = hm(h); return `<tr><td class="bold">${esc(h.name)}</td><td>${hapRole(h.name)}</td><td class="c">${h.n_copy}</td>
+        <td class="r">${grp(h.reads_total)}</td><td class="r">${grp(h.reads_unique)}</td>
+        ${ok ? (m ? `<td class="r">${grp(m.observed_coverage_per_copy)}</td><td class="r">${num(m.obs_exp_ratio, 2)}</td>
+          <td class="c">${esc(m.predicted_copy_number)}<div class="cell-sub">p ${num(m.prediction_confidence, 2)}</div></td>` : '<td></td><td></td><td></td>') : ''}
+        <td>${h.havanno ? (h.havanno.pathogenic.length ? h.havanno.pathogenic.map(v => `<span class="var-chip hit">${esc(v)}</span>`).join('') : '<span style="color:var(--muted)">none</span>') : '<span style="color:var(--muted)">no havanno</span>'}</td></tr>`; }).join('')}
+    </tbody></table></div>
+    ${conclusion('SMN1', call)}
+    <div class="links-line"><span class="links-key">files</span>${fileLinks(['paraphase_json', 'paraphase_bam', 'havanno_json'])}</div></div>`;
+  const notes = [
+    noteRow(useAdj || review ? 'caution' : 'info', 'depth model',
+      `Paraphase counts SMN copies from haplotype differences. When every SMN1 copy is identical and every SMN2 copy is identical it cannot tell 1:1 from 2:2 or 0:2 from 0:4; <code>smn_homology</code> then predicts the reads per copy from the other carrier targets and picks the copy number that fits. This report uses the model's copy number <b>only in that case</b>; elsewhere it is shown and a disagreement is flagged for review.`
+      + (M.smn_model ? ` Model: <code>${esc(M.smn_model)}</code>.` : ` <b>No model is supplied</b>, so identical-copy cases are not corrected.`)),
+    noteRow('caution', '2+0', `<b>2+0 silent carriers are not detected</b> by copy number.`),
+    noteRow('info', 'counts', `SMN2&Delta;7–8 is shown as — when ptcp-qc reports it as null (not called), not as zero.`),
+  ];
+  document.getElementById('smn-notes').innerHTML = notesCard(notes, 'smnnote');
+  document.getElementById('src-smn').innerHTML = src('paraphase');
+})();
+
+// ══ 03 — GBA1, CYP21A2, HBB, RPGR ════════════════════════════════════════════
+// havanno counts reported pathogenic and pseudogene-predictive variants per
+// haplotype; it does not say which haplotype is the gene. On real data the
+// pseudogene haplotypes are recognised by a large total deletion size and/or a
+// long list of pathogenic (pseudogene-derived) or pseudogene variants: GBAP1
+// haps carry ~16 "pathogenic" GBA1 variants and 1.6 kb of deletions, CYP21A1P
+// haps ~20 pseudogene markers and 128 bp. A hap is pseudogene-like when ANY of
+// the per-locus limits is reached; HBB and RPGR have no pseudogene in this view.
+function hapClass(group, h) {
+  const c = TPP.hap_class[group];
+  const a = h.havanno;
+  if (!c) return 'gene';
+  if (!a) return 'unknown';
+  if ((a.deletion_size || 0) >= c.min_del || (a.num_pathogenic || 0) >= c.min_patho || (a.num_pseudogene || 0) >= c.min_pseudo) return 'pseudo';
+  return 'gene';
+}
+function geneCall(group, gene, p) {
+  if (!p || !p.present) return { txt: 'No call', cls: 'gated', lede: 'bad', body: `No Paraphase result for ${gene} in the ptcp-qc report.` };
+  if (!p.havanno_present) return { txt: 'havanno missing', cls: 'gated', lede: 'conflict', body: `Total CN ${esc(p.total_cn)}, but no havanno annotation for this sample: reported variants were not assessed.` };
+  const haps = p.haplotypes || [];
+  const gene_ = haps.filter(h => hapClass(group, h) === 'gene');
+  const geneCopies = gene_.reduce((a, h) => a + (h.n_copy || 1), 0);
+  const expected = group === 'rpgr' ? (MALE ? 1 : 2) : 2;
+  const hits = gene_.filter(h => h.havanno && h.havanno.pathogenic.length);
+  const hitCopies = hits.reduce((a, h) => a + (h.n_copy || 1), 0);
+  const hitTxt = hits.map(h => `<b>${esc(h.name)}</b>${h.n_copy > 1 ? ` (×${h.n_copy})` : ''}: ${h.havanno.pathogenic.map(esc).join(', ')}`).join('; ');
+  const xl = group === 'rpgr';
+  if (hits.length) {
+    if (xl && MALE) return { txt: `${gene} variant (hemizygous)`, cls: 'fail', lede: 'bad', body: `Reported pathogenic variant on the single X haplotype — ${hitTxt}. In a male this is <b>not carrier status</b>. Confirm and refer.` };
+    return { txt: hitCopies > 1 ? `variants on ${hitCopies} gene copies` : 'variant on 1 gene copy', cls: hitCopies > 1 ? 'fail' : 'warn', lede: 'conflict',
+      body: `Reported pathogenic variant(s) on <b>gene-like</b> haplotype(s) — ${hitTxt}. ${hitCopies > 1 ? 'More than one gene copy is affected; <i>cis</i>/<i>trans</i> is not established here.' : 'Consistent with a <b>carrier</b> genotype.'} Confirm by targeted sequencing${group === 'cyp21' ? ' and MLPA' : ''} before reporting.` };
+  }
+  if (geneCopies < expected) return { txt: `${geneCopies} gene-like cop${geneCopies === 1 ? 'y' : 'ies'} (exp. ${expected})`, cls: 'warn', lede: 'conflict',
+    body: `Fewer gene-like copies than expected: a gene deletion or a large gene conversion (a pseudogene-like haplotype in place of a gene copy) is possible. Total CN ${esc(p.total_cn)}. Review the Paraphase JSON and BAM.` };
+  const totExp = TPP.total_cn_expected[group];
+  const dev = totExp != null && p.total_cn != null && p.total_cn !== (typeof totExp === 'object' ? (MALE ? totExp.M : totExp.K) : totExp);
+  return { txt: 'none reported', cls: 'pass', lede: 'agree',
+    body: `${geneCopies} gene-like cop${geneCopies === 1 ? 'y' : 'ies'} without a reported pathogenic variant${dev ? `; total CN ${esc(p.total_cn)} differs from the usual, which with intact gene copies points at an extra or missing <b>pseudogene</b> copy (common, benign)` : ''}. Only variants in the PTCP variant list are assessed.` };
+}
+function geneCard(group, gene, chips) {
+  const p = PP[group] || {};
+  if (!p.present) return `<div class="card">${cardHead(gene, chips)}<div class="empty-state">No Paraphase result for ${gene}.</div></div>`;
+  const call = geneCall(group, gene, p);
+  const rows = (p.haplotypes || []).map(h => {
+    const a = h.havanno, cl = hapClass(group, h);
+    const clBadge = cl === 'gene' ? badge('gene-like', 'info', true) : cl === 'pseudo' ? badge('pseudogene-like', 'nd', true) : badge('no havanno', 'gated', true);
+    return `<tr><td class="bold">${esc(h.name)}</td><td class="c">${h.n_copy}</td><td class="r">${grp(h.reads_total)}</td><td>${clBadge}</td>
+      <td class="r">${a ? grp(a.num_pathogenic) : '—'}</td><td class="r">${a ? grp(a.num_pseudogene) : '—'}</td><td class="r">${a ? grp(a.deletion_size) : '—'}</td>
+      <td style="white-space:normal">${a && a.pathogenic.length
+        ? (cl === 'gene' ? a.pathogenic.map(v => `<span class="var-chip hit">${esc(v)}</span>`).join('')
+                         : `<span style="color:var(--muted)">${a.pathogenic.length} on a pseudogene-like hap — not shown</span>`)
+        : '<span style="color:var(--muted)">none</span>'}</td></tr>`;
+  }).join('');
+  return `<div class="card">
+    ${cardHead(gene, chips, `<span class="compare-header-sub">total CN ${esc(p.total_cn)} · ${grp(p.total_reads)} reads</span>`)}
+    <div class="tbl-wrap"><table><thead><tr><th>Haplotype</th><th class="c">Copies</th><th class="r">Reads</th><th>Class</th>
+      <th class="r">Patho</th><th class="r">Pseudo</th><th class="r">Del bp</th><th>Pathogenic variants (gene-like haps)</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${(p.havanno_unmatched || []).length ? `<div class="links-line" style="color:var(--gold)"><span class="links-key">havanno</span>not matched to a Paraphase haplotype: ${p.havanno_unmatched.map(esc).join(', ')}</div>` : ''}
+    ${conclusion(gene, call)}</div>`;
+}
+(function() {
+  document.getElementById('genes').innerHTML =
+      geneCard('gba', 'GBA1', ['GBA1', 'GBAP1'])
+    + geneCard('cyp21', 'CYP21A2', ['CYP21A2', 'CYP21A1P'])
+    + geneCard('hbb', 'HBB', ['HBB'])
+    + geneCard('rpgr', 'RPGR', ['RPGR', MALE ? 'X · 1 copy expected' : 'X · 2 copies expected'])
+    + `<div class="card"><div class="links-line" style="border-top:none"><span class="links-key">files</span>${fileLinks(['havanno_json', 'paraphase_json', 'paraphase_bam'])}</div></div>`;
+  const hc = TPP.hap_class;
+  const notes = [
+    thresholdNote(`pseudogene-like haplotype: GBA deletion ≥ ${hc.gba.min_del} bp or ≥ ${hc.gba.min_patho} pathogenic / ${hc.gba.min_pseudo} pseudogene variants; CYP21 deletion ≥ ${hc.cyp21.min_del} bp or ≥ ${hc.cyp21.min_patho} / ${hc.cyp21.min_pseudo}`),
+    noteRow('caution', 'gene vs pseudogene', `Gene-like versus pseudogene-like is <b>this report's rule</b> on havanno's counts, not a Paraphase or havanno call. On GBAP1 haplotypes havanno lists the pseudogene-derived GBA1 alleles (RecNciI-type, the 55 bp exon 9 deletion …) as <i>pathogenic</i>; read on their own they look like a biallelic finding. They are counted, not shown, on pseudogene-like haplotypes. A partial gene conversion sits between the classes — the gene-copy count is the check for it.`),
+    noteRow('info', 'scope', `Only variants in the PTCP variant list (<code>${esc((M.havanno_variant_list || 'variant_list.GRCh38.vcf').split('/').pop())}</code>) are assessed; other point variants in these genes are not reported here.`),
+  ];
+  document.getElementById('genes-notes').innerHTML = notesCard(notes, 'genenote');
+  document.getElementById('src-genes').innerHTML = src('paraphase');
+})();
+
+// ══ 04 — HBA1/2 ══════════════════════════════════════════════════════════════
+(function() {
+  const h = PP.hba || {};
+  if (!h.present) { document.getElementById('hba').innerHTML = missingCard('No HBA result in the ptcp-qc report for this sample.'); return; }
+  const g = h.genotype_adjusted || h.genotype;
+  const changed = h.genotype && h.genotype_adjusted && h.genotype !== h.genotype_adjusted;
+  const lost = (g || '').split('/').reduce((a, al) => a + (al.match(/-/g) || []).length, 0);
+  const alpha0 = (g || '').split('/').some(al => al === '--');
+  const note = changed ? ` Paraphase alone called <b>${esc(h.genotype)}</b>; the Sawfish breakpoint changed it to <b>${esc(g)}</b>.` : '';
+  let call;
+  if (!g) call = { txt: 'No genotype', cls: 'gated', lede: 'bad', body: 'No HBA genotype.' };
+  else if (!lost) call = { txt: 'αα/αα', cls: 'pass', lede: 'agree', kc: true, body: `No α-globin gene loss by Paraphase or Sawfish (HBA total CN ${esc(h.total_cn)}).` };
+  else if (alpha0) call = { txt: `α⁰ carrier (${g})`, cls: 'fail', lede: 'bad', kc: true, body: `Both α-globin genes lost in <i>cis</i> on one chromosome: <b>α⁰-thalassaemia carrier</b>; a partner who is also α⁰ carries a risk of <b>Hb Bart's hydrops fetalis</b>.${note} Confirm by gap-PCR / MLPA.` };
+  else call = { txt: lost === 1 ? `α⁺ carrier (${g})` : `${lost} genes lost (${g})`, cls: 'warn', lede: 'conflict', kc: true,
+    body: `${lost === 1 ? 'One α-globin gene lost: <b>α⁺-thalassaemia silent carrier</b>.' : `${lost} α-globin genes lost (${esc(g)}).`}${note} Confirm by gap-PCR / MLPA.` };
+  const bps = h.sawfish || [];
+  const hits = (h.haplotypes || []).filter(x => x.havanno && x.havanno.pathogenic.length);
+  if (hits.length) call.body += ` Reported point variant(s): ${hits.map(x => `<b>${esc(x.name)}</b> (${x.havanno.pathogenic.map(esc).join(', ')})`).join('; ')} — review.`;
+  document.getElementById('hba').innerHTML = `<div class="card">
+    ${cardHead('HBA1 / HBA2', ['HBA1', 'HBA2'])}
+    <div class="kv-grid">
+      ${kviL('Paraphase GT', esc(h.genotype), `${Object.keys(h.sv_calls || {}).length} Paraphase SV call(s)`, null, 'cn-val')}
+      ${kviL('HBA total CN', esc(h.total_cn), 'all paralogous copies', null, 'cn-val')}
+      ${kviL('Sawfish SVs', bps.length, 'in the HBA window', bps.length ? 'warn' : 'ok', bps.length ? 'dev-val' : 'muted-val')}
+      ${kviL('Adjusted GT', esc(h.genotype_adjusted), changed ? 'changed by Sawfish' : 'as Paraphase', changed ? 'warn' : 'ok', changed ? 'dev-val' : 'cn-val')}
+    </div>
+    ${Object.keys(h.sv_calls || {}).length ? `<div class="links-line"><span class="links-key">Paraphase SV</span>${Object.entries(h.sv_calls).map(([k, v]) => `${esc(k)}: ${esc(v)}`).join(' · ')}</div>` : ''}
+    ${bps.length ? `<div class="compare-header" style="border-top:1px solid var(--border)"><span class="compare-header-title">Sawfish breakpoints</span></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Event</th><th>Position</th><th class="r">Length</th><th class="c">Type</th><th class="c">GT</th><th class="r">Ref / alt reads</th><th class="r">Alt fraction</th></tr></thead><tbody>
+      ${bps.map(b => { const ad = b.allele_depth || [0, 0], af = (ad[0] + ad[1]) ? ad[1] / (ad[0] + ad[1]) : null;
+        return `<tr><td class="bold">${esc((b.annotation || {}).name || 'unnamed')}</td><td>${esc(b.chrom)}:${grp(b.start)}-${grp(b.end)}</td>
+          <td class="r">${grp(b.length)} bp</td><td class="c">${esc(b.svtype)}</td><td class="c">${esc(b.genotype)}</td>
+          <td class="r">${grp(ad[0])} / ${grp(ad[1])}</td><td class="r">${pct(af, 0)}</td></tr>`; }).join('')}</tbody></table></div>` : ''}
+    <div class="compare-header" style="border-top:1px solid var(--border)"><span class="compare-header-title">Haplotypes</span></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Haplotype</th><th class="c">Copies</th><th class="r">Reads</th><th class="r">Unique</th><th>Reported variants (havanno)</th></tr></thead><tbody>
+      ${(h.haplotypes || []).map(x => `<tr><td class="bold">${esc(x.name)}</td><td class="c">${x.n_copy}</td><td class="r">${grp(x.reads_total)}</td><td class="r">${grp(x.reads_unique)}</td>
+        <td>${x.havanno ? (x.havanno.pathogenic.length ? x.havanno.pathogenic.map(v => `<span class="var-chip hit">${esc(v)}</span>`).join('') : '<span style="color:var(--muted)">none</span>') : '<span style="color:var(--muted)">no havanno</span>'}</td></tr>`).join('')}
+    </tbody></table></div>
+    ${conclusion('HBA', call)}
+    <div class="links-line"><span class="links-key">files</span>${fileLinks(['sawfish_vcf', 'hba_minimap2_bam', 'paraphase_json'])}</div></div>`;
+  const notes = [
+    noteRow('info', 'method', `Paraphase resolves the common 3.7 / 4.2 kb α⁺ deletions from haplotype structure. Larger deletions (SEA, MED-I, FIL, THAI …) need split-read evidence: the HBA window is re-aligned with minimap2 and called with Sawfish (CNV off); ptcp-qc's <code>genotype_adjusted</code> folds a Sawfish event into the genotype.`),
+    noteRow('info', 'reads', `HBA haplotype read counts overlap: reads shared between the HBA1, HBA2 and homology-box haplotypes count toward each (unique reads ${grp(h.unique_reads)} of ${grp(h.total_reads)} assignments).`),
+  ];
+  document.getElementById('hba-notes').innerHTML = notesCard(notes, 'hbanote');
+  document.getElementById('src-hba').innerHTML = src('hba');
+})();
+
+// ══ 05 — F8 ══════════════════════════════════════════════════════════════════
+// f8_inversion.py read classes: 01 + 10 inversion, 00 + 11 wildtype, x unclassified.
+(function() {
+  const card = (key, title) => {
+    const p = PP[key] || {}, f = p.f8_info;
+    if (!p.present || !f) return `<div class="card">${cardHead(title, ['F8'])}<div class="empty-state">No F8 result.</div></div>`;
+    const rc = f.read_counts || {};
+    const inv = (rc['01'] || 0) + (rc['10'] || 0), wt = (rc['00'] || 0) + (rc['11'] || 0), x = rc.x || 0;
+    const label = key === 'f8inv22' ? 'intron 22' : 'intron 1';
+    const gt = f.inversion_genotype;
+    let c;
+    if (f.has_inversion == null) c = { txt: 'No call', cls: 'gated', lede: 'bad', body: `Too few classified reads (${inv + wt}).` };
+    else if (f.has_inversion && !gt) c = { txt: 'Mixed evidence', cls: 'warn', lede: 'conflict', body: `Inversion (${inv}) and wildtype (${wt}) reads with no genotype issued${MALE ? ' — in a male (one X)' : ''}: possible sample mix, mosaicism or wrong sex in the sheet. Review.` };
+    else if (!f.has_inversion) c = { txt: `No ${label} inversion`, cls: 'pass', lede: 'agree', body: `${grp(wt)} reads support the wildtype configuration and none the inversion (GT ${esc(gt)}).` };
+    else if (MALE) c = { txt: `Hemizygous ${label} inv`, cls: 'fail', lede: 'bad', body: `Inversion-only reads in a male (GT ${esc(gt)}): consistent with <b>haemophilia A</b>, not carrier status. Confirm and refer.` };
+    else c = { txt: gt === '1/1' ? `Homozygous ${label} inv` : `${label} inversion carrier`, cls: 'warn', lede: 'conflict', body: `${grp(inv)} inversion and ${grp(wt)} wildtype reads (GT ${esc(gt)}): consistent with <b>haemophilia A carrier status</b>. Confirm by inverse-PCR / LR-PCR before reporting.` };
+    const tot = inv + wt + x || 1;
+    const seg = (n, col) => `<span style="width:${n / tot * 100}%;background:${col}"></span>`;
+    return `<div class="card">${cardHead(title, ['F8'], `<span class="compare-header-sub">GT ${esc(gt || '—')} · total CN ${esc(p.total_cn)}</span>`)}
+      <div class="pad"><div class="fbar">${seg(wt, 'var(--accent)')}${seg(inv, 'var(--red)')}${seg(x, 'var(--slate)')}</div>
+        <div class="fbar-legend"><span><i style="background:var(--accent)"></i>wildtype (00 + 11) <b>${grp(wt)}</b></span>
+          <span><i style="background:var(--red)"></i>inversion (01 + 10) <b>${grp(inv)}</b></span>
+          <span><i style="background:var(--slate)"></i>unclassified (x) <b>${grp(x)}</b></span></div></div>
+      ${(f.spans || []).length ? `<div class="tbl-wrap"><table><thead><tr><th>Class</th><th>Haplotype</th><th>Region</th><th class="r">Reads</th></tr></thead><tbody>
+        ${f.spans.map(s => `<tr><td>${esc(s.inversion_label)}</td><td class="bold">${esc(s.haplotype)}</td><td>${esc(s.region)}</td><td class="r">${grp(s.count)}</td></tr>`).join('')}</tbody></table></div>` : ''}
+      ${conclusion(title, c)}</div>`;
+  };
+  document.getElementById('f8').innerHTML = card('f8inv22', 'Intron 22 inversion') + card('f8inv1', 'Intron 1 inversion')
+    + `<div class="card"><div class="links-line" style="border-top:none"><span class="links-key">files</span>${fileLinks(['f8_json', 'f8_vcf'])}</div></div>`;
+  const notes = [
+    noteRow('info', 'method', `PacBio's <code>f8_inversion.py</code> calls the inversions from clipping patterns of the Paraphase-remapped reads, tied to the PureTarget guide design. Classes 01/10 support the inversion, 00/11 the wildtype; a female with both is 0/1, a male with both gets no genotype.`),
+    noteRow('caution', 'sex', `The genotype depends on the sex in the sample sheet (here <b>${esc(SEX)}</b>). Check section 01's sex check before reading any F8 call.`),
+  ];
+  document.getElementById('f8-notes').innerHTML = notesCard(notes, 'f8note');
+  document.getElementById('src-f8').innerHTML = src('f8');
+})();
+
+// ══ 06 — REPEAT EXPANSIONS ═══════════════════════════════════════════════════
+function trUnits(a, cfg) {
+  const parts = String(a.motif_count || '').split('_').map(Number);
+  return { units: cfg.count.reduce((t, i) => t + (parts[i] || 0), 0), intr: cfg.interruption != null ? (parts[cfg.interruption] || 0) : null };
+}
+function trClass(units, cfg) {
+  const c = cfg.classes.find(([lo, hi]) => units >= lo && units <= hi) || cfg.classes[cfg.classes.length - 1];
+  return { name: c[2], cls: c[3] };
+}
+(function() {
+  const RANK = ['pass', 'info', 'warn', 'fail'];
+  const cards = Object.entries(TTR).map(([trid, cfg]) => {
+    const t = TR[trid];
+    const head = cardHead(cfg.gene, [trid, t ? t.repeat_unit : cfg.unit], t ? `<span class="compare-header-sub">${grp(t.total_reads)} spanning reads · karyotype ${MALE ? 'XY' : 'XX'}</span>` : '');
+    if (!t) return `<div class="card">${head}<div class="empty-state">No TRGT result for ${esc(trid)}.</div></div>`;
+    const dropped = t.alleles.filter(a => !a.coverage);
+    const al = t.alleles.filter(a => a.coverage).map(a => Object.assign({}, a, trUnits(a, cfg)));
+    al.forEach(a => { a.klass = trClass(a.units, cfg); });
+    const worst = al.reduce((w, a) => RANK.indexOf(a.klass.cls) > RANK.indexOf(w.klass.cls) ? a : w, { klass: { name: 'normal', cls: 'pass' } });
+    const sizes = al.map(a => `${a.units}${a.intr != null ? ` (${a.intr} AGG)` : ''}`).join(' / ');
+    let c;
+    if (!al.length) c = { txt: 'No call', cls: 'gated', lede: 'bad', body: `No allele with read support at ${esc(trid)}.` };
+    else if (worst.klass.cls === 'pass') c = { txt: `${cfg.gene} ${worst.klass.name}`, cls: 'pass', lede: 'agree',
+      body: `${cfg.unit} ${cfg.what || 'repeat'} ${sizes} — within the ${worst.klass.name} range${cfg.xlinked && MALE ? ' (single X allele)' : ''}${cfg.xlinked && !MALE && al.length === 1 ? ' (one allele size: both X alleles the same length)' : ''}.` };
+    else {
+      let extra = '';
+      if (trid === 'FXS_FMR1' && worst.klass.name === 'premutation' && worst.intr != null)
+        extra = ` The expanded allele carries <b>${worst.intr} AGG interruption(s)</b>; fewer AGGs raise the risk of expansion to a full mutation on maternal transmission.`;
+      if (worst.methylation != null) extra += ` Methylation ${pct(worst.methylation, 0)} on that allele.`;
+      c = { txt: `${cfg.gene} ${worst.klass.name}`, cls: worst.klass.cls, lede: worst.klass.cls === 'fail' ? 'bad' : 'conflict',
+        body: `${cfg.unit} ${cfg.what || 'repeat'} ${sizes}: one allele in the <b>${worst.klass.name}</b> range (${worst.units} units, CI ${grp((worst.ci || {}).min)}–${grp((worst.ci || {}).max)} bp, ${grp(worst.coverage)} reads).${extra} Confirm sizing by an orthogonal assay before reporting.` };
+    }
+    const plot = F.trgt_plot;
+    return `<div class="card">${head}
+      <div class="tbl-wrap"><table><thead><tr><th>Allele</th><th class="r">${cfg.unit} units</th>${cfg.interruption != null ? '<th class="r">AGG</th>' : ''}
+        <th class="r">Size (CI)</th><th class="r">Reads</th><th class="r">Purity</th><th class="r">Methylation</th><th>Class</th></tr></thead><tbody>
+        ${al.map(a => `<tr><td class="bold">${esc(a.allele)}</td><td class="r"><span class="cn${a.klass.cls === 'pass' ? '' : ' dev'}">${a.units}</span></td>
+          ${cfg.interruption != null ? `<td class="r">${grp(a.intr)}</td>` : ''}
+          <td class="r">${grp(a.size)} bp<div class="cell-sub">${grp((a.ci || {}).min)}–${grp((a.ci || {}).max)}</div></td>
+          <td class="r">${grp(a.coverage)}</td><td class="r">${pct(a.purity, 0)}</td><td class="r">${a.methylation != null ? pct(a.methylation, 0) : '—'}</td>
+          <td>${badge(a.klass.name, a.klass.cls, true)}</td></tr>`).join('')}</tbody></table></div>
+      ${dropped.length ? `<div class="links-line"><span class="links-key">note</span>${dropped.length} allele record(s) with 0 reads not shown (ptcp-qc writes a second allele for single-allele calls)</div>` : ''}
+      ${conclusion(cfg.gene, c)}
+      ${plot ? `<div class="links-line"><span class="links-key">plots</span>${['motifs_allele', 'meth_allele', 'motifs_waterfall', 'meth_waterfall'].map(m =>
+          `<a href="${esc(plot.split('{mode}').join(m).split('{trid}').join(trid))}">${m}</a>`).join(' &nbsp;·&nbsp; ')}</div>` : ''}
+    </div>`;
+  });
+  document.getElementById('tr').innerHTML = cards.join('')
+    + `<div class="card"><div class="links-line" style="border-top:none"><span class="links-key">files</span>${fileLinks(['trgt_vcf', 'trgt_spanning_bam'])}</div></div>`;
+
+  const offTarget = Object.keys(TR).filter(k => !TTR[k]);
+  const notes = [
+    thresholdNote(Object.values(TTR).map(c => `${c.gene}${c.tract ? ' ' + c.tract : ''} ${c.classes.map(x => `${x[2]} ${x[0]}${x[1] >= 1e9 ? '+' : '–' + x[1]}`).join(', ')}`).join('; ')),
+    noteRow('info', 'units', `Repeat units come from TRGT's motif counts, not from allele length in bp: FMR1 counts CGG + AGG (clinical sizing) with the AGG count shown separately; FXN counts GAA only (the A-tail is excluded).`),
+    noteRow('info', 'not reported', offTarget.length ? `TRGT also genotyped <b>${offTarget.length}</b> repeat-panel locus/loci from off-target reads (${offTarget.map(esc).join(', ')}). They are not carrier targets and are <b>not reported</b>.` : 'No off-target repeat loci were genotyped.'),
+    noteRow('caution', 'fail reads', `Large expansions rarely reach HiFi quality, so TRGT also gets the fail reads (<code>--fail-reads</code>). A sample run HiFi-only can drop an expanded allele (read mode: <b>${esc(M.read_mode)}</b>).`),
+  ];
+  document.getElementById('tr-notes').innerHTML = notesCard(notes, 'trnote');
+  document.getElementById('src-tr').innerHTML = src('trgt');
+})();
+
+// ── Scroll-spy ───────────────────────────────────────────────────────────────
+(function() {
+  if (typeof IntersectionObserver === 'undefined') return;
+  const sections = document.querySelectorAll('section');
+  const links    = document.querySelectorAll('#sidebar-nav a');
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(a => a.classList.remove('active'));
+        const lnk = document.querySelector(`#sidebar-nav a[href="#${e.target.id}"]`);
+        if (lnk) lnk.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+  sections.forEach(s => observer.observe(s));
+})();
+</script>
+</body>
+</html>

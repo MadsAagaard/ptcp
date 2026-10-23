@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<!--
+  ptcp_run_qc_report_template.html — 261015
+  ──────────────────────────────────────────────────────────────────────────────
+  Self-contained single-file HTML template for the PTCP RUN QC report: one per
+  run (sample sheet), for the laboratory / bioinformatics review of the run.
+
+  QC ONLY
+  ───────
+  This report names every sample of the run, so it carries NO result: no copy
+  number, genotype, inversion call or repeat size. Per target it shows reads
+  and whether the caller produced a call ("callable"), never what the call is.
+  Results live only in each sample's own report (<npn>.PTCP.sampleReport.html).
+
+  INJECTION POINT: as the sample template (ptcp_report_collector.py).
+
+  SECTIONS
+  ────────
+  01  Run Integrity       sheet vs ptcp-qc, missing / dropped samples, sex checks, tool versions
+  02  Sample QC           one row per sample (ptcp-qc stats + aggregate sample_stats)
+  03  Carrier Targets     samples x targets: reads and callability
+  04  All ptcp-qc Loci    aggregate locus_stats (incl. off-target / unmapped), no sample identities
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PTCP Run QC</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --navy:    #0c0d0f;
+    --navy2:   #141619;
+    --navy3:   #1d2024;
+    --slate:   #3a4046;
+    --accent:  #5aa9f0;
+    --gold:    #e9b949;
+    --red:     #e0655f;
+    --green:   #57c98a;
+    --muted:   #8a9199;
+    --border:  rgba(255,255,255,0.10);
+    --text:    #eceef0;
+    --text2:   #b6bcc4;
+    --card-bg: #141619;
+    --mono:    'IBM Plex Mono', monospace;
+    --serif:   'Fraunces', serif;
+    --sans:    'DM Sans', sans-serif;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--navy); color: var(--text);
+    font-family: var(--sans); font-weight: 300; font-size: 14px; line-height: 1.6;
+    display: flex; flex-direction: row; min-height: 100vh;
+  }
+
+  /* ── Sidebar ── */
+  aside {
+    position: sticky; top: 0; height: 100vh;
+    width: 280px; flex-shrink: 0;
+    background: var(--navy2); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; padding: 0; overflow-y: auto;
+  }
+  .logo-block { padding: 20px 20px 18px; border-bottom: 1px solid var(--border); }
+  .logo-dept-name {
+    font-family: var(--mono); font-size: 20px; font-weight: 600;
+    letter-spacing: 1.5px; text-transform: uppercase; white-space: nowrap;
+    color: var(--accent); margin-bottom: 8px;
+  }
+  .logo-dept-sub { font-family: var(--mono); font-size: 11px; color: var(--muted); line-height: 1.75; }
+  .logo-assay {
+    margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border);
+    font-family: var(--mono); font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--gold);
+  }
+  nav { padding: 16px 0 8px; }
+  nav a {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 20px; font-size: 12px; font-weight: 400;
+    color: var(--muted); text-decoration: none;
+    letter-spacing: 0.3px; border-left: 2px solid transparent; transition: all 0.2s;
+  }
+  nav a:hover, nav a.active { color: var(--text); background: rgba(90,169,240,0.07); border-left-color: var(--accent); }
+  nav a .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--slate); flex-shrink: 0; transition: background 0.2s; }
+  nav a:hover .dot, nav a.active .dot { background: var(--accent); }
+  .nav-group-label {
+    font-family: var(--mono); font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase;
+    color: var(--muted); padding: 14px 20px 6px; opacity: 0.8;
+  }
+
+  /* ── Sample picker (sidebar) ── */
+  .sample-list { padding: 0 0 20px; flex: 1; }
+  .sample-pick {
+    display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 10px;
+    width: 100%; text-align: left; border: none; background: transparent; cursor: pointer;
+    padding: 7px 20px; border-left: 2px solid transparent;
+    font-family: var(--mono); font-size: 12px; color: var(--muted); transition: all 0.15s;
+  }
+  .sample-pick:hover { color: var(--text); background: rgba(90,169,240,0.05); }
+  .sample-pick.sel { color: var(--text); background: rgba(90,169,240,0.10); border-left-color: var(--accent); }
+  .sample-pick .sx { font-size: 10px; color: var(--muted); }
+  .qdot { width: 8px; height: 8px; border-radius: 50%; }
+  .qdot.pass { background: var(--green); } .qdot.warn { background: var(--gold); } .qdot.fail { background: var(--red); }
+
+  /* ── Main ── */
+  main { flex: 1; min-width: 0; padding: 48px 64px 80px; max-width: 1400px; }
+  .mock-banner {
+    margin-bottom: 28px; padding: 10px 16px; border-radius: 8px;
+    background: rgba(233,185,73,0.08); border: 1px dashed rgba(233,185,73,0.45);
+    font-family: var(--mono); font-size: 11px; color: var(--gold); line-height: 1.7;
+  }
+
+  /* ── Page header ── */
+  .page-header { margin-bottom: 48px; padding-bottom: 28px; border-bottom: 1px solid var(--border); }
+  .page-header .tag {
+    font-family: var(--mono); font-size: 13px; letter-spacing: 2.5px;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 14px;
+  }
+  .page-header h1 {
+    font-family: var(--mono); font-size: 28px; font-weight: 600;
+    color: var(--text); line-height: 1.2; margin-bottom: 20px; letter-spacing: -0.5px;
+  }
+  .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-top: 20px; }
+  .meta-item { display: flex; flex-direction: column; gap: 3px; }
+  .meta-label { font-family: var(--mono); font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--accent); }
+  .meta-value { font-family: var(--mono); font-size: 16px; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+
+  /* ── Sections ── */
+  section { margin-bottom: 56px; scroll-margin-top: 32px; }
+  .section-header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 20px; }
+  .section-num { font-family: var(--mono); font-size: 11px; color: var(--accent); font-weight: 600; letter-spacing: 1px; }
+  h2 { font-family: var(--serif); font-size: 22px; font-weight: 600; color: var(--text); letter-spacing: -0.3px; }
+
+  /* ── Cards & KV ── */
+  .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .card + .card { margin-top: 12px; }
+  .stack { display: flex; flex-direction: column; gap: 12px; }
+  .kv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0; }
+  .kv-item { padding: 16px 20px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  .kv-item:last-child { border-right: none; }
+  .kv-label { font-family: var(--mono); font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); margin-bottom: 5px; }
+  .kv-value { font-size: 16px; font-weight: 500; color: var(--text); font-family: var(--mono); }
+  .kv-value.large { font-size: 22px; font-weight: 600; }
+  .kv-value.muted-val { color: var(--muted); }
+  .kv-value.cn-val  { color: var(--accent); font-size: 26px; }
+  .kv-value.dev-val { color: var(--gold);   font-size: 26px; }
+  .kv-sub { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 2px; }
+  .kv-sub.warn { color: var(--gold); }
+  .kv-sub.ok   { color: var(--green); }
+  .kv-sub.bad  { color: var(--red); }
+
+  /* ── Badges ── */
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 10px; border-radius: 4px; white-space: nowrap;
+    font-family: var(--mono); font-size: 11px; font-weight: 600;
+    letter-spacing: 0.5px; text-transform: uppercase;
+  }
+  .badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0.8; }
+  .badge-pass { background: rgba(87,201,138,0.15);  color: var(--green); }
+  .badge-fail { background: rgba(224,101,95,0.15);   color: var(--red); }
+  .badge-warn { background: rgba(233,185,73,0.15);  color: var(--gold); }
+  .badge-info { background: rgba(90,169,240,0.15);  color: var(--accent); }
+  .badge-nd   { background: rgba(138,145,153,0.15); color: var(--muted); }
+  .badge-gated { background: rgba(138,145,153,0.10); color: var(--muted); border: 1px dashed rgba(138,145,153,0.5); }
+  .badge-gated::before { background: transparent; border: 1px solid currentColor; opacity: 0.7; }
+  .badge.sm { font-size: 9px; padding: 2px 7px; }
+  .badge.kc { text-transform: none; letter-spacing: 0.2px; }   /* genotypes: α must not become A */
+
+  /* ── Tables ── */
+  .tbl-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead tr { background: var(--navy3); border-bottom: 1px solid var(--border); }
+  th { padding: 10px 14px; text-align: left; font-family: var(--mono); font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); font-weight: 600; white-space: nowrap; }
+  th.r, td.r { text-align: right; }
+  th.c, td.c { text-align: center; }
+  tbody tr { border-bottom: 1px solid var(--border); transition: background 0.15s; }
+  tbody tr:hover { background: rgba(90,169,240,0.05); }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr.pick { cursor: pointer; }
+  tbody tr.sel { background: rgba(90,169,240,0.09); box-shadow: inset 2px 0 0 var(--accent); }
+  td { padding: 10px 14px; color: var(--text2); font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+  td.npn { font-size: 13px; font-weight: 600; color: var(--text); }
+  td.bold { font-weight: 600; color: var(--text); }
+  .cell-sub { font-family: var(--mono); font-size: 9px; color: var(--muted); margin-top: 1px; }
+  .cn { font-size: 15px; font-weight: 600; color: var(--text); }
+  .cn.dev { color: var(--gold); }
+  .cn.zero { color: var(--red); }
+  .cn.nc { color: var(--muted); }
+
+  /* ── Locus coverage matrix ── */
+  td.cov { text-align: center; font-size: 11px; }
+  td.cov span { display: inline-block; min-width: 54px; padding: 3px 6px; border-radius: 3px; }
+  td.cov .ok   { background: rgba(87,201,138,0.10); color: var(--text2); }
+  td.cov .warn { background: rgba(233,185,73,0.18); color: var(--gold); font-weight: 600; }
+  td.cov .fail { background: rgba(224,101,95,0.20); color: var(--red); font-weight: 600; }
+
+  /* ── Share-of-run bars (Kinnex pattern) ── */
+  .share-wrap { display: flex; align-items: center; gap: 10px; }
+  .share-track { position: relative; width: 96px; height: 6px; background: var(--navy3); border-radius: 3px; flex-shrink: 0; }
+  .share-fill { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 3px; background: linear-gradient(90deg, var(--accent), #86c4ff); }
+  .share-fill.low { background: linear-gradient(90deg, #e08a4a, var(--gold)); }
+  .share-even { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--muted); opacity: 0.6; }
+
+  /* ── Composition bar (F8 read classes) ── */
+  .fbar { display: flex; height: 12px; border-radius: 3px; overflow: hidden; background: var(--navy3); }
+  .fbar span { display: block; height: 100%; }
+  .fbar-legend { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-top: 10px; font-family: var(--mono); font-size: 10px; color: var(--muted); }
+  .fbar-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; font-style: normal; }
+  .fbar-legend b { font-weight: 600; color: var(--text2); }
+  .pad { padding: 14px 16px; }
+
+  /* ── Compare header / foldable cards ── */
+  .compare-header { padding: 10px 16px; background: var(--navy3); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .compare-header-title { font-family: var(--mono); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text); font-weight: 600; }
+  .compare-header-sub { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+  .spacer { margin-left: auto; }
+  .reg-toggle {
+    display: flex; align-items: center; gap: 10px;
+    width: 100%; text-align: left; border: none; cursor: pointer; user-select: none;
+    padding: 11px 16px; background: var(--navy3);
+    border-bottom: 1px solid var(--border); transition: color 0.15s;
+  }
+  .reg-toggle:not(.open) { border-bottom: none; }
+  .reg-toggle .arrow { transition: transform 0.2s; display: inline-block; color: var(--muted); font-size: 9px; }
+  .reg-toggle.open .arrow { transform: rotate(90deg); }
+  .reg-toggle:hover .compare-header-title { color: var(--accent); }
+  .subsec-body { display: none; }
+  .subsec-body.visible { display: block; }
+  .gene-chip { display: inline-block; margin: 0 3px 0 0; padding: 1px 7px; border-radius: 3px; background: rgba(90,169,240,0.1); border: 1px solid rgba(90,169,240,0.2); color: var(--text2); font-family: var(--mono); font-size: 10px; }
+  .var-chip {
+    display: inline-block; margin: 1px 3px 1px 0; padding: 1px 7px; border-radius: 3px;
+    font-family: var(--mono); font-size: 10px; white-space: nowrap;
+    color: var(--muted); background: rgba(138,145,153,0.10); border: 1px solid rgba(138,145,153,0.22);
+  }
+  .var-chip.hit { color: var(--red); background: rgba(224,101,95,0.12); border-color: rgba(224,101,95,0.35); }
+  .links-line { padding: 10px 16px; background: rgba(0,0,0,0.12); border-top: 1px solid var(--border); font-family: var(--mono); font-size: 10px; color: var(--muted); word-break: break-all; }
+  .links-line a { color: var(--accent); text-decoration: none; }
+  .links-line a:hover { text-decoration: underline; }
+  .links-key { color: var(--accent); margin-right: 10px; letter-spacing: 1px; text-transform: uppercase; font-size: 9px; }
+
+  /* ── Selected-sample banner (sections 03-06) ── */
+  .sel-banner {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    margin: 18px 0 12px; padding: 10px 16px; border-radius: 8px;
+    background: rgba(90,169,240,0.06); border: 1px solid rgba(90,169,240,0.22);
+    font-family: var(--mono); font-size: 11px; color: var(--text2);
+  }
+  .sel-banner b { color: var(--text); font-size: 14px; }
+  .sel-banner .lab { font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--accent); }
+  .nav-btn {
+    border: 1px solid var(--border); background: var(--navy3); color: var(--text2);
+    font-family: var(--mono); font-size: 11px; border-radius: 4px; padding: 3px 10px; cursor: pointer;
+  }
+  .nav-btn:hover { color: var(--text); border-color: var(--accent); }
+
+  /* ── Interpretation ── */
+  .interp-body { padding: 15px 18px; font-family: var(--sans); font-size: 13px; line-height: 1.72; color: var(--text2); }
+  .interp-body b { font-weight: 500; color: var(--text); }
+  .interp-lede { display: block; font-family: var(--mono); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 7px; }
+  .interp-lede.agree    { color: var(--green); }
+  .interp-lede.partial  { color: var(--accent); }
+  .interp-lede.conflict { color: var(--gold); }
+  .interp-lede.bad      { color: var(--red); }
+
+  /* ── Integrity checks (Kinnex pattern) ── */
+  .checks { margin-top: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--card-bg); overflow: hidden; }
+  .check-row { display: flex; align-items: center; gap: 10px; padding: 9px 16px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 11px; color: var(--text2); }
+  .check-row:last-child { border-bottom: none; }
+  .check-detail { color: var(--muted); margin-left: auto; text-align: right; }
+
+  /* ── Notes & caveats ── */
+  .notes-card { margin-top: 12px; }
+  .note-row {
+    display: grid; grid-template-columns: 26px 160px 1fr;
+    align-items: start; gap: 12px;
+    padding: 13px 18px; border-top: 1px solid var(--border);
+    font-family: var(--mono); font-size: 10px; line-height: 1.75;
+  }
+  .note-icon { font-size: 13px; text-align: center; line-height: 1.5; }
+  .note-src  { font-size: 9px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); padding-top: 2px; }
+  .note-row.caution { background: rgba(233,185,73,0.05); }
+  .note-row.caution .note-icon, .note-row.caution .note-body { color: var(--gold); }
+  .note-row.info    { background: rgba(90,169,240,0.04); }
+  .note-row.info    .note-icon, .note-row.info .note-body { color: var(--accent); }
+  .note-body b { font-weight: 600; }
+
+  .source-line { font-family: var(--mono); font-size: 9px; color: var(--muted); margin-top: 10px; letter-spacing: 0.5px; opacity: 0.75; }
+  .subsection-divider { font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); margin: 24px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  .empty-state { padding: 32px; text-align: center; color: var(--muted); }
+
+  @media (max-width: 1100px) {
+    body { flex-direction: column; }
+    aside { position: static; width: 100%; height: auto; }
+    main { padding: 32px 16px 64px; }
+    .note-row { grid-template-columns: 22px 1fr; }
+    .note-src { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+    html { scroll-behavior: auto; }
+  }
+</style>
+</head>
+<body>
+
+<aside>
+  <div class="logo-block">
+    <div class="logo-dept-name">Klinisk Genetik</div>
+    <div class="logo-dept-sub">Vejle Sygehus<br>Beriderbakken 4<br>7100 Vejle</div>
+    <div class="logo-assay">PureTarget · Run QC</div>
+  </div>
+  <nav id="sidebar-nav">
+    <a href="#s-run"><span class="dot"></span>Run Integrity</a>
+    <a href="#s-qc"><span class="dot"></span>Sample QC</a>
+    <a href="#s-targets"><span class="dot"></span>Carrier Targets</a>
+    <a href="#s-loci"><span class="dot"></span>All ptcp-qc Loci</a>
+  </nav>
+</aside>
+
+<main>
+  <div id="top-banner"></div>
+  <div class="page-header">
+    <div class="tag">PTCP Run QC — no results in this report</div>
+    <h1 id="title"></h1>
+    <div class="meta-grid" id="meta-grid"></div>
+  </div>
+
+  <section id="s-run">
+    <div class="section-header"><span class="section-num">01</span><h2>Run Integrity</h2></div>
+    <div class="card" id="run-cards"></div>
+    <div class="checks" id="run-checks"></div>
+    <div class="card" id="run-tools" style="margin-top:12px"></div>
+    <div id="run-notes"></div>
+    <div class="source-line" id="src-run"></div>
+  </section>
+
+  <section id="s-qc">
+    <div class="section-header"><span class="section-num">02</span><h2>Sample QC</h2></div>
+    <div class="card" id="qc-table"></div>
+    <div id="qc-notes"></div>
+    <div class="source-line" id="src-qc"></div>
+  </section>
+
+  <section id="s-targets">
+    <div class="section-header"><span class="section-num">03</span><h2>Carrier Targets — Reads &amp; Callability</h2></div>
+    <div class="card" id="tg-matrix"></div>
+    <div id="tg-notes"></div>
+    <div class="source-line" id="src-targets"></div>
+  </section>
+
+  <section id="s-loci">
+    <div class="section-header"><span class="section-num">04</span><h2>All ptcp-qc Loci</h2></div>
+    <div class="card" id="loci-table"></div>
+    <div id="loci-notes"></div>
+    <div class="source-line" id="src-loci"></div>
+  </section>
+</main>
+
+<script>
+// ── DATA — injected by ptcp_report_collector.py ──────────────────────────────
+/* DATA_INJECT */
+const DATA = {};
+
+const TEMPLATE_VERSION = '261015';
+
+// ── Helpers (germline template primitives) ───────────────────────────────────
+function esc(s) {
+  if (s == null) return '—';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+// keepCase: genotypes such as αα/αα must not be upper-cased to AA/AA
+function badge(text, cls, sm, keepCase) { return `<span class="badge badge-${cls}${sm ? ' sm' : ''}${keepCase ? ' kc' : ''}">${esc(text)}</span>`; }
+function kvi(label, value, sub, subCls) {
+  return `<div class="kv-item"><div class="kv-label">${label}</div><div class="kv-value">${value}</div>
+    ${sub ? `<div class="kv-sub${subCls ? ' ' + subCls : ''}">${sub}</div>` : ''}</div>`;
+}
+function kviL(label, value, sub, subCls, valCls) {
+  return `<div class="kv-item"><div class="kv-label">${label}</div>
+    <div class="kv-value large${valCls ? ' ' + valCls : ''}">${value}</div>
+    ${sub ? `<div class="kv-sub${subCls ? ' ' + subCls : ''}">${sub}</div>` : ''}</div>`;
+}
+function src(key) {
+  const s = DATA._sources && DATA._sources[key];
+  return s ? `&#9432;&nbsp;${esc(s)}` : '';
+}
+function noteRow(kind, source, body) {
+  const icon = kind === 'caution' ? '&#9888;' : '&#9432;';
+  return `<div class="note-row ${kind}"><div class="note-icon">${icon}</div>
+    <div class="note-src">${esc(source)}</div><div class="note-body">${body}</div></div>`;
+}
+function notesCard(rows, prefix) {
+  if (!rows.length) return '';
+  const nCaution = rows.filter(r => r.indexOf('note-row caution') !== -1).length;
+  return `<div class="card notes-card">
+    <button class="reg-toggle" id="${prefix}-toggle-0" onclick="toggleSubsec('${prefix}', 0)">
+      <span class="arrow">&#9654;</span>
+      <span class="compare-header-title">Notes &amp; Caveats</span>
+      <span class="compare-header-sub">${rows.length} item${rows.length > 1 ? 's' : ''}</span>
+      <span class="spacer"></span>
+      ${nCaution ? badge(`${nCaution} caution`, 'warn') : badge('info only', 'nd')}
+    </button>
+    <div class="subsec-body" id="${prefix}-body-0">${rows.join('')}</div>
+  </div>`;
+}
+function toggleSubsec(prefix, idx) {
+  const toggle = document.getElementById(prefix + '-toggle-' + idx);
+  const body   = document.getElementById(prefix + '-body-'   + idx);
+  if (!toggle || !body) return;
+  const open = body.classList.toggle('visible');
+  toggle.classList.toggle('open', open);
+}
+function interp(lede, ledeCls, body) {
+  return `<div class="interp-body"><span class="interp-lede ${ledeCls}">${lede}</span>${body}</div>`;
+}
+function conclusion(title, call) {
+  return `<div class="compare-header" style="border-top:1px solid var(--border)">
+      <span class="compare-header-title">Conclusion</span>
+      <span class="compare-header-sub">${title}</span><span class="spacer"></span>${badge(call.txt, call.cls, false, call.kc)}
+    </div>${interp('Interpretation', call.lede, call.body)}`;
+}
+function num(v, d) { return v == null ? '—' : Number(v).toFixed(d == null ? 1 : d); }
+function grp(v)  { return v == null ? '—' : Number(v).toLocaleString('en'); }
+function pct(f, d) { return f == null ? '—' : `${(100 * f).toFixed(d == null ? 1 : d)}%`; }
+// ptcp-qc reports read accuracy in percent (99.995); readers think in Q.
+function qOf(acc) {
+  if (acc == null) return null;
+  const err = 1 - acc / 100;
+  return err <= 0 ? 60 : Math.min(60, -10 * Math.log10(err));
+}
+function median(a) {
+  const s = a.filter(v => v != null).slice().sort((x, y) => x - y);
+  if (!s.length) return null;
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+// ── Thresholds (configuration; placeholders until approved) ──────────────────
+const THRESHOLDS = (DATA.thresholds && typeof DATA.thresholds === 'object') ? DATA.thresholds : {};
+const TH_APPROVED = !!(THRESHOLDS.approved_by && THRESHOLDS.approved_date);
+function thresholdsFor(section, builtins) { return Object.assign({}, builtins, THRESHOLDS[section] || {}); }
+function thresholdNote(criteria) {
+  return TH_APPROVED
+    ? noteRow('info', 'thresholds', `Acceptance criteria (${criteria}) are this laboratory's own, read from <code>${esc(THRESHOLDS.source_file || 'the thresholds file')}</code> and approved by <b>${esc(THRESHOLDS.approved_by)}</b> on <b>${esc(THRESHOLDS.approved_date)}</b>.`)
+    : noteRow('caution', 'thresholds', `The thresholds shown (${criteria}) are <b>placeholders</b>, not this laboratory's acceptance criteria. They become criteria once the collector's thresholds file carries <code>approved_by</code> and <code>approved_date</code>.`);
+}
+const TQC  = thresholdsFor('qc',  { locus_reads_fail: 50, locus_reads_warn: 150, on_target_frac_warn: 0.10, read_q_warn: 30, share_ratio_warn: 0.5 });
+const TSEX = thresholdsFor('sex', { y_xy_min: 0.15, y_xx_max: 0.05, x_xx_min: 0.75, x_xy_max: 0.65 });
+const TPP  = thresholdsFor('paraphase', {
+  smn1_expected: 2,
+  // pseudogene-like when ANY limit is reached (see section 03)
+  hap_class: { gba: { min_del: 500, min_patho: 10, min_pseudo: 10 }, cyp21: { min_del: 64, min_patho: 10, min_pseudo: 10 }, hbb: null, rpgr: null },
+  total_cn_expected: { gba: 4, cyp21: 4, hbb: 2, rpgr: { M: 1, K: 2 } },
+});
+// Repeat classes in UNITS of the counted motif(s): count = indexes into TRGT
+// motif_count. FMR1 CGG:AGG counts both (clinical sizing), FXN A:GAA counts GAA.
+const TTR  = thresholdsFor('trgt', {
+  FXS_FMR1:   { gene: 'FMR1', unit: 'CGG', count: [0, 1], interruption: 1, xlinked: true,
+                classes: [[0, 44, 'normal', 'pass'], [45, 54, 'intermediate', 'info'], [55, 200, 'premutation', 'warn'], [201, 1e9, 'full mutation', 'fail']] },
+  FRDA_FXN:   { gene: 'FXN',  unit: 'GAA', count: [1], xlinked: false,
+                classes: [[0, 33, 'normal', 'pass'], [34, 65, 'premutation', 'warn'], [66, 1e9, 'full penetrance', 'fail']] },
+  FRAXE_AFF2: { gene: 'AFF2', unit: 'GCC', count: [0], xlinked: true,
+                classes: [[0, 39, 'normal', 'pass'], [40, 60, 'intermediate', 'info'], [61, 200, 'premutation', 'warn'], [201, 1e9, 'full mutation', 'fail']] },
+  EIEE1_ARX:  { gene: 'ARX', tract: 'PA1', unit: 'GCN', what: 'polyalanine tract 1', count: [0], xlinked: true,
+                classes: [[0, 16, 'normal', 'pass'], [17, 1e9, 'expanded', 'warn']] },
+  PRTS_ARX:   { gene: 'ARX', tract: 'PA2', unit: 'GCN', what: 'polyalanine tract 2', count: [0], xlinked: true,
+                classes: [[0, 12, 'normal', 'pass'], [13, 1e9, 'expanded', 'warn']] },
+});
+Object.entries(TTR).forEach(([k, c]) => { if (c.tract) c.gene = `${c.gene} ${c.tract}`; });
+
+// Carrier targets (ptcp-qc locus groups), in display order.
+const TARGETS = THRESHOLDS.carrier_targets || [
+  ['smn1', 'SMN1/2'], ['gba', 'GBA1'], ['cyp21', 'CYP21A2'], ['hba', 'HBA1/2'], ['hbb', 'HBB'], ['rpgr', 'RPGR'],
+  ['f8inv1', 'F8 int1'], ['f8inv22', 'F8 int22'], ['FXS_FMR1', 'FMR1'], ['FRDA_FXN', 'FXN'], ['AFF2', 'AFF2'], ['ARX', 'ARX'],
+];
+
+// ── Sample QC verdict (shared by both reports) ───────────────────────────────
+const VERDICT_TXT = { pass: 'pass', warn: 'review', fail: 'fail', nd: 'no data' };
+const VERDICT_CLS = { pass: 'pass', warn: 'warn', fail: 'fail', nd: 'gated' };
+function locusState(n) { return n == null || n < TQC.locus_reads_fail ? 'fail' : n < TQC.locus_reads_warn ? 'warn' : 'ok'; }
+function sexCheck(ratios, sexReported) {
+  const r = ratios || {};
+  let data = null;
+  if (r.ratio_y_auto != null && r.ratio_x_auto != null) {
+    if (r.ratio_y_auto >= TSEX.y_xy_min && r.ratio_x_auto <= TSEX.x_xy_max) data = 'M';
+    else if (r.ratio_y_auto <= TSEX.y_xx_max && r.ratio_x_auto >= TSEX.x_xx_min) data = 'K';
+    else data = '?';
+  }
+  const state = data == null ? 'nd' : data === '?' ? 'warn' : data === sexReported ? 'ok' : 'fail';
+  return { data, state, r };
+}
+// qc: { total_reads, on_target{total}, on_target_fraction, read_quality_median, sex_ratios }
+// loci: { group: n } or { group: { n } }
+// shares / compTargets (optional): the sample's target shares and the comparison's
+// { target: { median } }; a share below share_ratio_warn x the median adds a review issue.
+function sampleQC(qc, loci, sexReported, shares, compTargets, compLabel) {
+  const q = qc || {};
+  const nOf = v => v == null ? null : (typeof v === 'object' ? v.n : v);
+  const loc = TARGETS.map(([k]) => nOf((loci || {})[k]));
+  const sx = sexCheck(q.sex_ratios, sexReported);
+  const qv = qOf(q.read_quality_median);
+  const onFrac = q.on_target_fraction != null ? q.on_target_fraction
+               : (q.total_reads && q.on_target ? q.on_target.total / q.total_reads : null);
+  if (!loci || !Object.keys(loci).length) return { verdict: 'nd', issues: ['no ptcp-qc sample JSON'], minLoc: null, loc, sx, qv, onFrac };
+  const minLoc = Math.min(...loc.map(v => v == null ? 0 : v));
+  const issues = [];
+  let verdict = 'pass';
+  const lower = v => { if (verdict === 'pass') verdict = v; };
+  if (sx.state === 'fail') { verdict = 'fail'; issues.push('sex mismatch'); }
+  const low = TARGETS.filter((t, i) => loc[i] == null || loc[i] < TQC.locus_reads_fail).map(t => t[1]);
+  const weak = TARGETS.filter((t, i) => loc[i] != null && loc[i] >= TQC.locus_reads_fail && loc[i] < TQC.locus_reads_warn).map(t => t[1]);
+  if (low.length) { verdict = 'fail'; issues.push(`< ${TQC.locus_reads_fail} reads: ${low.join(', ')}`); }
+  if (weak.length) { lower('warn'); issues.push(`< ${TQC.locus_reads_warn} reads: ${weak.join(', ')}`); }
+  if (onFrac != null && onFrac < TQC.on_target_frac_warn) { lower('warn'); issues.push('low on-target'); }
+  if (qv != null && qv < TQC.read_q_warn) { lower('warn'); issues.push('low read Q'); }
+  if (shares && compTargets) {
+    const lowShare = TARGETS.filter(([k]) => compTargets[k] && compTargets[k].median && shares[k] != null
+                                         && shares[k] / compTargets[k].median < TQC.share_ratio_warn).map(t => t[1]);
+    if (lowShare.length) { lower('warn'); issues.push(`low share vs ${compLabel || 'comparison'}: ${lowShare.join(', ')}`); }
+  }
+  if (sx.state === 'warn') { lower('warn'); issues.push('sex ambiguous'); }
+  if (sx.state === 'nd') issues.push('no sex ratios');
+  return { verdict, issues, minLoc, loc, sx, qv, onFrac };
+}
+
+if (!DATA.metadata) {
+  document.getElementById('title').textContent = 'No data — inject JSON via ptcp_report_collector.py';
+  throw new Error('DATA stub detected — template not yet populated');
+}
+const M = DATA.metadata, R = DATA.run || {}, S = DATA.samples || [];
+const REF = DATA.reference;   // lab target-share reference, or null
+const QC = {};
+S.forEach(s => { QC[s.id] = sampleQC(s, s.loci, s.sex_reported, s.target_shares, REF ? REF.targets : null, 'reference'); });
+// Sequencing groups: one SMRT Cell = one multiplexed pool. A sample whose uBAMs
+// come from more than one cell (top-up) belongs to no group and is kept out of
+// the per-cell statistics.
+const cellOf = s => (s.cells || []).length === 1 ? s.cells[0] : null;
+// single-cell samples grouped by cell, then multi-cell / unknown-cell samples last
+const byCell = (a, b) => { const ca = cellOf(a), cb = cellOf(b);
+  if (!ca !== !cb) return ca ? -1 : 1;
+  return ca === cb ? String(a.id).localeCompare(String(b.id)) : ca < cb ? -1 : 1; };
+const GROUPS = {};
+S.forEach(s => { const c = cellOf(s); if (c) (GROUPS[c] = GROUPS[c] || []).push(s); });
+const MULTI = S.filter(s => (s.cells || []).length > 1), NOCELL = S.filter(s => !(s.cells || []).length);
+// ptcp-qc locus group -> caller keys whose "callable" flag counts for that target
+const CALLERS = { smn1: ['smn1'], gba: ['gba'], cyp21: ['cyp21'], hba: ['hba'], hbb: ['hbb'], rpgr: ['rpgr'], f8inv1: ['f8inv1'], f8inv22: ['f8inv22'],
+                  FXS_FMR1: ['FXS_FMR1'], FRDA_FXN: ['FRDA_FXN'], AFF2: ['FRAXE_AFF2'], ARX: ['EIEE1_ARX', 'PRTS_ARX'] };
+const ICON = { ok: ['&#10003;', 'var(--green)'], warn: ['&#9888;', 'var(--gold)'], fail: ['&#10007;', 'var(--red)'] };
+const reportLink = id => `${id}.PTCP.sampleReport.html`;
+
+// ── Header ───────────────────────────────────────────────────────────────────
+(function() {
+  document.title = `PTCP Run QC — ${M.samplesheet}`;
+  document.getElementById('title').textContent = M.samplesheet;
+  document.getElementById('meta-grid').innerHTML = [
+    ['Sequencing', `${Object.keys(GROUPS).length} cell${Object.keys(GROUPS).length === 1 ? '' : 's'}${MULTI.length ? ` + ${MULTI.length} multi-cell` : ''}`], ['Samples', S.length], ['Read mode', M.read_mode],
+    ['PTCP basis', M.ptcp_version ? `v${M.ptcp_version}` : null], ['ptcp-qc', M.ptcp_qc_version], ['Report date', M.report_date],
+  ].map(([l, v]) => `<div class="meta-item"><div class="meta-label">${l}</div><div class="meta-value">${esc(v)}</div></div>`).join('');
+  if (DATA._demo) document.getElementById('top-banner').innerHTML = `<div class="mock-banner">&#9888;&nbsp; ${DATA._demo}</div>`;
+})();
+
+// ══ 01 — RUN INTEGRITY ═══════════════════════════════════════════════════════
+(function() {
+  const nFail = S.filter(s => QC[s.id].verdict === 'fail').length, nWarn = S.filter(s => QC[s.id].verdict === 'warn').length;
+  const nNd = S.filter(s => QC[s.id].verdict === 'nd').length;
+  const tr = R.total_reads || {};
+  document.getElementById('run-cards').innerHTML = `
+    <div class="compare-header"><span class="compare-header-title">Run composition</span><span class="compare-header-sub">${esc(M.run_output)}</span></div>
+    <div class="kv-grid">
+      ${kviL('In sample sheet', R.samples_in_sheet, '')}
+      ${kviL('In ptcp-qc', R.ptcp_qc_samples, `${grp(tr.total)} reads · ${grp(tr.fail)} fail`)}
+      ${kviL('No uBAM found', (R.missing || []).length, (R.missing || []).length ? 'see checks' : 'all sheet rows matched', (R.missing || []).length ? 'warn' : 'ok', (R.missing || []).length ? 'dev-val' : null)}
+      ${kviL('Dropped by size gate', (R.dropped || []).length, `ptcpMinGB ${esc(M.min_gb)}`, null, (R.dropped || []).length ? 'dev-val' : null)}
+      ${kviL('Sample QC', `${S.length - nFail - nWarn - nNd} / ${S.length}`, `${nWarn} review · ${nFail} fail${nNd ? ` · ${nNd} no data` : ''}`, nFail || nNd ? 'bad' : nWarn ? 'warn' : 'ok')}
+    </div>
+    <div class="compare-header" style="border-top:1px solid var(--border)"><span class="compare-header-title">Sequencing</span>
+      <span class="compare-header-sub">SMRT Cells the analysed uBAMs came from · share-of-pool statistics are per cell</span></div>
+    <div class="tbl-wrap"><table><thead><tr><th>SMRT Cell</th><th>Run folder</th><th class="r">Samples in this report</th><th class="r">Reads</th></tr></thead><tbody>
+      ${Object.entries(GROUPS).sort().map(([c, ss]) => `<tr><td class="bold">${esc(c)}</td><td>${esc([...new Set(ss.flatMap(s => s.runs || []))].join(', '))}</td>
+        <td class="r">${ss.length}</td><td class="r">${grp(ss.reduce((a, s) => a + (s.total_reads || 0), 0))}</td></tr>`).join('')}
+      ${MULTI.length ? `<tr><td class="bold" style="color:var(--gold)">multiple cells</td><td style="white-space:normal">${MULTI.map(s => `${esc(s.id)}: ${s.cells.map(esc).join(' + ')}`).join('<br>')}</td>
+        <td class="r">${MULTI.length}</td><td class="r">${grp(MULTI.reduce((a, s) => a + (s.total_reads || 0), 0))}</td></tr>` : ''}
+      ${NOCELL.length ? `<tr><td class="bold" style="color:var(--muted)">not recorded</td><td>—</td><td class="r">${NOCELL.length}</td><td class="r">${grp(NOCELL.reduce((a, s) => a + (s.total_reads || 0), 0))}</td></tr>` : ''}
+    </tbody></table></div>`;
+  const noJson = S.filter(s => !s.has_sample_json), notInSheet = S.filter(s => !s.in_sample_sheet), notInAgg = S.filter(s => s.in_sample_sheet && !s.in_aggregate);
+  const sexFail = S.filter(s => QC[s.id].sx.state === 'fail'), sexOther = S.filter(s => ['warn', 'nd'].includes(QC[s.id].sx.state));
+  const checks = [
+    { state: (R.missing || []).length ? 'warn' : 'ok', text: (R.missing || []).length ? 'Sample sheet rows without a matching uBAM (NPN + testlist)' : 'Every sample sheet row matched its uBAMs',
+      detail: (R.missing || []).length ? R.missing.map(x => `${x.id} · ${x.testlist}`).join(', ') : `${R.samples_in_sheet} / ${R.samples_in_sheet}` },
+    { state: notInAgg.length ? 'fail' : 'ok', text: notInAgg.length ? 'Analysed samples missing from the ptcp-qc aggregate' : 'Every sample is in the ptcp-qc aggregate',
+      detail: notInAgg.length ? notInAgg.map(s => s.id).join(', ') : `${R.ptcp_qc_samples} / ${S.length}` },
+    { state: noJson.length ? 'fail' : 'ok', text: noJson.length ? 'Samples without a per-sample ptcp-qc JSON — their sample report is empty' : 'Every sample has its per-sample ptcp-qc JSON',
+      detail: noJson.length ? noJson.map(s => s.id).join(', ') : `${S.length} / ${S.length}` },
+    { state: notInSheet.length ? 'fail' : 'ok', text: notInSheet.length ? 'ptcp-qc samples not in the sample sheet' : 'No ptcp-qc sample outside the sample sheet',
+      detail: notInSheet.length ? notInSheet.map(s => s.id).join(', ') : '0' },
+    { state: sexFail.length ? 'fail' : sexOther.length ? 'warn' : 'ok',
+      text: sexFail.length ? 'Sheet sex contradicts the X/Y read ratios — sample identity or sheet error'
+          : sexOther.length ? 'Sex not checked or not determinable for some samples' : 'Sheet sex agrees with the X/Y read ratios for every sample',
+      detail: sexFail.length ? sexFail.map(s => `${s.id}: sheet ${s.sex_reported}, data ${QC[s.id].sx.data}`).join(', ')
+            : sexOther.length ? sexOther.map(s => s.id).join(', ') : `${S.length} / ${S.length}` },
+  ];
+  document.getElementById('run-checks').innerHTML = checks.map(c => {
+    const [g, col] = ICON[c.state];
+    return `<div class="check-row"><span style="color:${col}">${g}</span><span${c.state === 'ok' ? '' : ` style="color:${col}"`}>${esc(c.text)}</span>
+      <span class="check-detail">${esc(c.detail)}</span></div>`;
+  }).join('');
+  const tv = M.tools || [];
+  document.getElementById('run-tools').innerHTML = `
+    <div class="compare-header"><span class="compare-header-title">Tool versions</span><span class="compare-header-sub">against PacBio PTCP v${esc(M.ptcp_version)}</span>
+      <span class="spacer"></span>${badge(`${tv.filter(t => t.version !== t.ptcp).length} differ`, tv.some(t => t.version !== t.ptcp) ? 'info' : 'pass')}</div>
+    <div class="kv-grid">${tv.map(t => kvi(esc(t.tool), esc(t.version), t.version === t.ptcp ? 'as PTCP' : `PTCP: ${esc(t.ptcp)}`, t.version === t.ptcp ? 'ok' : 'warn')).join('')}</div>
+    <div class="links-line"><span class="links-key">lrsCustomTools</span>${esc(M.lrscustomtools_release)}
+      &nbsp;&nbsp;<span class="links-key">collector</span>${esc(M.collector_version)} &nbsp;&nbsp;<span class="links-key">template</span>${TEMPLATE_VERSION}</div>`;
+  const notes = [
+    noteRow('info', 'scope', `This report names every sample and therefore carries <b>no results</b>. Calls are only in each sample's own report, which shows nothing about other samples.`),
+    noteRow('info', 'failed tasks', `Failed or ignored Nextflow tasks are recorded in <code>runInfo/&lt;date&gt;_${esc(M.samplesheet)}/FAILED_TASKS.PTCP.txt</code>, written after this report.`),
+    noteRow('info', 'tool versions', `Configured versions (conf/ptcp.config), not probed from the tools at run time.`),
+    noteRow(Object.keys(GROUPS).length > 1 || MULTI.length ? 'caution' : 'info', 'sequencing',
+      `"Samples in this report" counts only the samples of this sample sheet; other samples on the same SMRT Cell are not seen here. ${MULTI.length ? `${MULTI.length} sample(s) combine reads from more than one cell (top-up) and are left out of the per-cell share-of-pool statistics.` : ''}`),
+  ];
+  document.getElementById('run-notes').innerHTML = notesCard(notes, 'runnote');
+  document.getElementById('src-run').innerHTML = src('run');
+})();
+
+// ══ 02 — SAMPLE QC ═══════════════════════════════════════════════════════════
+(function() {
+  const total = S.reduce((a, s) => a + (s.total_reads || 0), 0);
+  // share of the sample's own SMRT Cell (pool), among the samples of that cell in this report
+  const poolOf = s => { const g = GROUPS[cellOf(s)]; if (!g) return null;
+    const tot = g.reduce((a, o) => a + (o.total_reads || 0), 0), even = 100 / g.length;
+    const shares = g.map(o => (o.total_reads || 0) / tot * 100);
+    return { share: (s.total_reads || 0) / tot * 100, even, max: Math.max(...shares), n: g.length }; };
+  const order = [...S].sort(byCell);
+  const rows = order.map(s => {
+    const d = QC[s.id], x = d.sx, pl = poolOf(s);
+    const col = x.state === 'fail' ? 'var(--red)' : x.state === 'warn' ? 'var(--gold)' : 'var(--text2)';
+    return `<tr><td class="npn"><a href="${esc(reportLink(s.id))}" style="color:inherit;text-decoration:none" title="open sample report">${esc(s.id)}</a>
+        <div class="cell-sub">${esc(s.testlist)} · ${(s.cells || []).length ? s.cells.map(esc).join(' + ') : 'cell not recorded'}</div></td>
+      <td><span style="color:${col}">${esc(s.sex_reported)} &rarr; ${esc(x.data)}</span><div class="cell-sub">${x.state === 'nd' ? 'no X/Y ratios' : `X ${num(x.r.ratio_x_auto, 2)} · Y ${num(x.r.ratio_y_auto, 2)}`}</div></td>
+      <td class="r">${grp(s.total_reads)}<div class="cell-sub">on-target ${grp(s.on_target_reads)}</div></td>
+      <td>${pl ? `<div class="share-wrap"><div class="share-track"><div class="share-fill${pl.share < pl.even * 0.5 ? ' low' : ''}" style="width:${pl.share / pl.max * 100}%"></div>
+        <div class="share-even" style="left:${pl.even / pl.max * 100}%"></div></div><span style="color:var(--text)">${pl.share.toFixed(1)}%</span></div>
+        <div class="cell-sub">of ${pl.n} on this cell · even ${pl.even.toFixed(1)}%</div>`
+        : `<span style="color:var(--muted)">${(s.cells || []).length > 1 ? 'multiple cells' : '—'}</span>`}</td>
+      <td class="r"${d.onFrac != null && d.onFrac < TQC.on_target_frac_warn ? ' style="color:var(--gold)"' : ''}>${pct(d.onFrac)}</td>
+      <td class="r">${d.minLoc != null ? grp(d.minLoc) : '—'}<div class="cell-sub">lowest target</div></td>
+      <td class="r">${d.qv != null ? `Q${num(d.qv, 0)}` : '—'}<div class="cell-sub">${s.read_length_median != null ? `${grp(s.read_length_median)} bp` : ''}</div></td>
+      <td style="white-space:normal;min-width:170px">${badge(VERDICT_TXT[d.verdict], VERDICT_CLS[d.verdict], true)}${d.issues.length ? `<div class="cell-sub" style="color:var(--gold);overflow-wrap:anywhere">${esc(d.issues.join(' · '))}</div>` : ''}</td></tr>`;
+  }).join('');
+  document.getElementById('qc-table').innerHTML = `
+    <div class="compare-header"><span class="compare-header-title">ptcp-qc per sample</span>
+      <span class="compare-header-sub">${S.length} samples · ${grp(total)} reads · grouped by SMRT Cell · NPN links to the sample report</span></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Sample</th><th>Sex sheet &rarr; data</th><th class="r">Reads</th>
+      <th>Share of cell &nbsp;<span style="color:var(--slate)">| = even</span></th>
+      <th class="r">On-target</th><th class="r">Target reads</th><th class="r">Read Q / length</th><th>QC</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const notes = [
+    thresholdNote(`target reads ≥ ${TQC.locus_reads_warn} (fail &lt; ${TQC.locus_reads_fail}), on-target ≥ ${pct(TQC.on_target_frac_warn, 0)}, median read Q ≥ ${TQC.read_q_warn}, sex from X/Y ratios`),
+    noteRow('caution', 'ptcp-qc coverage', `ptcp-qc's <code>pct_targets_ge_*</code> / <code>mean_coverage</code> count all 48 rows of its BED, including repeat-panel loci a carrier run does not capture, so they are not used; reads per carrier target are (section 03).`),
+    noteRow('info', 'on-target', REF && REF.on_target_fraction ? `Reference on-target fraction (${esc(REF.name)}): median ${pct(REF.on_target_fraction.median)}, range ${pct(REF.on_target_fraction.min)}–${pct(REF.on_target_fraction.max)}.` : `On-target fraction varies with the off-target background of the capture; no lab reference is supplied to compare it with.`),
+    noteRow('info', 'share of cell', `Share of the reads of the sample's SMRT Cell among the samples of that cell <b>in this report</b>; the tick marks an even split. It shows pooling balance, so it is only computed within one cell. Samples combining several cells (top-ups) have none.`),
+    REF ? noteRow('info', 'target share', `"low share vs reference" = a target's share of the sample's on-target reads is below ${num(TQC.share_ratio_warn, 2)}× the median of the lab reference <b>${esc(REF.name)}</b> (${grp(REF.n_samples)} samples). Depth-independent, so it applies equally to every cell and run.`)
+        : noteRow('caution', 'target share', `No lab target-share reference is supplied, so targets are judged on absolute reads only in this report. Each sample report compares with its own SMRT Cell when that cell has enough samples.`),
+  ];
+  document.getElementById('qc-notes').innerHTML = notesCard(notes, 'qcnote');
+  document.getElementById('src-qc').innerHTML = src('qc');
+})();
+
+// ══ 03 — CARRIER TARGETS ═════════════════════════════════════════════════════
+(function() {
+  // run median over ALL samples (ptcp-qc aggregate), not only those with a sample JSON
+  const colMed = TARGETS.map(([k]) => { const ls = (DATA.locus_stats || {})[k]; return ls && ls.coverage_stats ? ls.coverage_stats.median : median(S.map(s => (s.loci || {})[k])); });
+  const cell = (s, k) => {
+    const n = (s.loci || {})[k];
+    if (!s.has_sample_json) return '<td class="cov"><span class="fail">—</span></td>';
+    const callable = s.callable ? CALLERS[k].every(c => s.callable[c]) : null;
+    const r = REF && REF.targets[k], sh = (s.target_shares || {})[k];
+    const ratio = r && r.median && sh != null ? sh / r.median : null;
+    return `<td class="cov"><span class="${locusState(n)}">${grp(n)}</span>${callable === false ? '<div class="cell-sub" style="color:var(--red)">no call</div>' : ''}${
+      ratio != null && ratio < TQC.share_ratio_warn ? `<div class="cell-sub" style="color:var(--gold)">${num(ratio, 2)}× ref</div>` : ''}</td>`;
+  };
+  document.getElementById('tg-matrix').innerHTML = `
+    <div class="compare-header"><span class="compare-header-title">Reads per carrier target</span>
+      <span class="compare-header-sub">HiFi + fail reads · warn &lt; ${TQC.locus_reads_warn} · fail &lt; ${TQC.locus_reads_fail} · "no call" = the caller produced no result${REF ? ` · "×ref" = share below ${num(TQC.share_ratio_warn, 2)}× the reference` : ''}</span></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Sample</th>${TARGETS.map(([, l]) => `<th class="c">${esc(l)}</th>`).join('')}</tr></thead>
+    <tbody>${[...S].sort(byCell).map(s => `<tr><td class="npn">${esc(s.id)}<div class="cell-sub">${(s.cells || []).map(esc).join(' + ') || '—'}</div></td>${TARGETS.map(([k]) => cell(s, k)).join('')}</tr>`).join('')}
+      <tr style="background:rgba(0,0,0,0.15)"><td class="bold">median reads<div class="cell-sub">all samples here</div></td>${colMed.map(v => `<td class="c bold">${v == null ? '—' : grp(Math.round(v))}</td>`).join('')}</tr>
+      ${REF ? `<tr style="background:rgba(0,0,0,0.15)"><td class="bold">reference share<div class="cell-sub">${esc(REF.name)}</div></td>${TARGETS.map(([k]) => { const r = REF.targets[k];
+        return `<td class="c">${r ? `${pct(r.median)}<div class="cell-sub">${pct(r.min)}–${pct(r.max)}</div>` : '—'}</td>`; }).join('')}</tr>` : ''}
+    </tbody></table></div>`;
+  const notes = [
+    noteRow('info', 'reading the matrix', `A column low across the run points at the capture (probe / guide design or a run problem); a row low across targets points at the sample.`),
+    noteRow('info', 'callability', `"no call" means ptcp-qc carries no result for that caller (no SMN1 copy number, no Paraphase total CN, no F8 genotype, no TRGT allele with reads). It says nothing about what a call would be.`),
+  ];
+  document.getElementById('tg-notes').innerHTML = notesCard(notes, 'tgnote');
+  document.getElementById('src-targets').innerHTML = src('qc');
+})();
+
+// ══ 04 — ALL ptcp-qc LOCI ════════════════════════════════════════════════════
+(function() {
+  const ls = DATA.locus_stats || {};
+  const targetSet = new Set(TARGETS.map(t => t[0]));
+  const rows = Object.entries(ls).sort((a, b) => (b[1].total_reads || 0) - (a[1].total_reads || 0)).map(([k, v]) => {
+    const kind = targetSet.has(k) ? badge('carrier target', 'info', true) : ['off-target', 'unmapped'].includes(k) ? badge(k, 'nd', true) : badge('repeat panel (not captured)', 'nd', true);
+    const c = v.coverage_stats || {};
+    return `<tr><td class="bold">${esc(k)}</td><td>${kind}</td><td class="r">${grp(v.samples_with_coverage)} / ${grp(S.length)}</td><td class="r">${grp(v.total_reads)}</td>
+      <td class="r">${grp(c.min)}</td><td class="r">${grp(c.median)}</td><td class="r">${grp(c.max)}</td></tr>`;
+  }).join('');
+  document.getElementById('loci-table').innerHTML = `
+    <div class="compare-header"><span class="compare-header-title">qc.aggregate.json locus_stats</span><span class="compare-header-sub">run-level, no sample identities</span></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Locus</th><th>Kind</th><th class="r">Samples with reads</th><th class="r">Total reads</th>
+      <th class="r">Min</th><th class="r">Median</th><th class="r">Max</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const notes = [noteRow('info', 'off-target loci', `The ptcp-qc BED includes the repeat expansion panel 2.0 loci. On a carrier run they collect only stray reads; they are listed for completeness and to show the off-target background.`)];
+  document.getElementById('loci-notes').innerHTML = notesCard(notes, 'locinote');
+  document.getElementById('src-loci').innerHTML = src('qc');
+})();
+
+// ── Scroll-spy ───────────────────────────────────────────────────────────────
+(function() {
+  if (typeof IntersectionObserver === 'undefined') return;
+  const sections = document.querySelectorAll('section');
+  const links    = document.querySelectorAll('#sidebar-nav a');
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(a => a.classList.remove('active'));
+        const lnk = document.querySelector(`#sidebar-nav a[href="#${e.target.id}"]`);
+        if (lnk) lnk.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+  sections.forEach(s => observer.observe(s));
+})();
+</script>
+</body>
+</html>
