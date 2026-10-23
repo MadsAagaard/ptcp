@@ -41,6 +41,7 @@ Env TRGT      : ${params.condaEnvs.trgt51}
 Env Paraphase : ${params.condaEnvs.paraphase35}
 Env Sawfish   : ${params.condaEnvs.sawfish221}
 Env ptcp      : ${params.condaEnvs.ptcp}
+lrsShared     : ${params.lrsSharedDir}
 lrsCustomTools: ${params.lrsCustomToolsBase}
 PTCP scripts  : ${params.ptcpScripts}
 TRGT panel    : ${params.ptcpTrgtBed}
