@@ -41,6 +41,7 @@ Env TRGT      : ${params.condaEnvs.trgt51}
 Env Paraphase : ${params.condaEnvs.paraphase35}
 Env Sawfish   : ${params.condaEnvs.sawfish221}
 Env ptcp      : ${params.condaEnvs.ptcp}
+lrsShared     : ${params.lrsSharedDir}
 lrsCustomTools: ${params.lrsCustomToolsBase}
 PTCP scripts  : ${params.ptcpScripts}
 TRGT panel    : ${params.ptcpTrgtBed}
@@ -48,7 +49,7 @@ Paraphase cfg : ${params.ptcpParaphaseConfig}
 ptcp-qc BED   : ${params.ptcpQcBed}
 Variant list  : ${params.ptcpVariantList ?: 'none (havanno skipped)'}
 SMN model     : ${params.ptcpSmnRegression ?: 'none (SMN homology correction skipped)'}
-uBAM search   : ${params.input ?: params.ptcpDataArchive}
+uBAM search   : ${params.input ?: params.dataArchive}
 OutputDirBase : ${params.outputDirBase}
 Run output    : ${params.runOutBase}
 workDir       : ${workflow.workDir}
@@ -281,7 +282,7 @@ log.info "Samplesheet format: ${ssFormat == 'smrtlink' ? 'SMRT Link CSV' : 'LabW
 // uBAM discovery (germline globs, PureTarget archive; --input searches
 // another folder). uBAM name: <npn>_<material>_<testlist>_<gender>.<movie>.<readset>.<barcode>.bam
 // -------------------------------------------------------------------------
-def root     = params.input ?: params.ptcpDataArchive
+def root     = params.input ?: params.dataArchive
 def inputBam = params.hifiReads
     ? (params.input ? "${root}/**/*.hifi_reads.*.bam" : "${root}/**/hifi_reads/*.hifi_reads.*.bam")
     : (params.input ? "${root}/**/*.bam"              : "${root}/**/*_reads/*.bam")
